@@ -1,0 +1,74 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": [
+    {
+      "id": "lan",
+      "interface": "lan",
+      "enable": true,
+      "range_from": "192.168.1.100",
+      "range_to": "192.168.1.199",
+      "domain": "",
+      "failover_peerip": "",
+      "mac_allow": [],
+      "mac_deny": [],
+      "domainsearchlist": [],
+      "defaultleasetime": 7200,
+      "maxleasetime": 86400,
+      "gateway": "",
+      "dnsserver": [],
+      "winsserver": [],
+      "ntpserver": [],
+      "staticarp": false,
+      "ignorebootp": false,
+      "ignoreclientuids": false,
+      "nonak": false,
+      "disablepingcheck": false,
+      "dhcpleaseinlocaltime": false,
+      "statsgraph": false,
+      "denyunknown": null,
+      "pool": [
+        {
+          "parent_id": "lan",
+          "id": 0,
+          "range_from": "192.168.1.200",
+          "range_to": "192.168.1.209"
+        }
+      ],
+      "numberoptions": [],
+      "staticmap": [
+        {
+          "parent_id": "lan",
+          "id": 0,
+          "mac": "aa:bb:cc:dd:ee:12",
+          "ipaddr": "192.168.1.20",
+          "hostname": "nas",
+          "descr": "NAS"
+        }
+      ]
+    },
+    {
+      "id": "opt1",
+      "interface": "opt1",
+      "enable": true,
+      "range_from": "10.0.20.2",
+      "range_to": "10.0.20.50",
+      "pool": [],
+      "numberoptions": [],
+      "staticmap": []
+    },
+    {
+      "id": "opt2",
+      "interface": "opt2",
+      "enable": false,
+      "range_from": "172.16.0.100",
+      "range_to": "172.16.0.200",
+      "pool": [],
+      "numberoptions": [],
+      "staticmap": []
+    }
+  ],
+  "_links": {}
+}

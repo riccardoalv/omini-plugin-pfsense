@@ -1,0 +1,95 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": [
+    {
+      "id": 0,
+      "con_id": "con1",
+      "uniqueid": 4,
+      "version": 2,
+      "state": "ESTABLISHED",
+      "local_host": "203.0.113.10",
+      "local_port": "500",
+      "local_id": "203.0.113.10",
+      "remote_host": "192.0.2.99",
+      "remote_port": "500",
+      "remote_id": "192.0.2.99",
+      "initiator_spi": "a1",
+      "responder_spi": "b2",
+      "nat_remote": false,
+      "nat_any": false,
+      "encr_alg": "AES_GCM_16",
+      "encr_keysize": 256,
+      "integ_alg": null,
+      "prf_alg": "PRF_HMAC_SHA2_256",
+      "dh_group": "ECP_256",
+      "established": 3600,
+      "rekey_time": 20000,
+      "child_sas": [
+        {
+          "name": "con1_1",
+          "uniqueid": 7,
+          "reqid": 1,
+          "state": "INSTALLED",
+          "mode": "TUNNEL",
+          "protocol": "ESP",
+          "encap": false,
+          "spi_in": "c1",
+          "spi_out": "c2",
+          "encr_alg": "AES_GCM_16",
+          "encr_keysize": 256,
+          "integ_alg": null,
+          "dh_group": null,
+          "bytes_in": 1000,
+          "bytes_out": 2000,
+          "packets_in": 10,
+          "packets_out": 20,
+          "use_in": 1,
+          "use_out": 1,
+          "rekey_time": 3000,
+          "life_time": 3600,
+          "install_time": 600,
+          "local_ts": [
+            "192.168.1.0/24"
+          ],
+          "remote_ts": [
+            "10.50.0.0/16"
+          ]
+        },
+        {
+          "name": "con1_2",
+          "uniqueid": 8,
+          "reqid": 2,
+          "state": "INSTALLED",
+          "mode": "TUNNEL",
+          "protocol": "ESP",
+          "encap": false,
+          "spi_in": "c3",
+          "spi_out": "c4",
+          "encr_alg": "AES_GCM_16",
+          "encr_keysize": 256,
+          "integ_alg": null,
+          "dh_group": null,
+          "bytes_in": 500,
+          "bytes_out": 250,
+          "packets_in": 5,
+          "packets_out": 2,
+          "use_in": 1,
+          "use_out": 1,
+          "rekey_time": 3000,
+          "life_time": 3600,
+          "install_time": 600,
+          "local_ts": [
+            "192.168.1.0/24"
+          ],
+          "remote_ts": [
+            "10.60.0.0/16"
+          ]
+        }
+      ]
+    }
+  ],
+  "_links": {}
+}

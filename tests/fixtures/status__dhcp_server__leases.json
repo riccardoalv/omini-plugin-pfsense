@@ -1,0 +1,57 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": [
+    {
+      "id": 0,
+      "ip": "192.168.1.100",
+      "mac": "aa:bb:cc:dd:ee:10",
+      "hostname": "laptop",
+      "if": "lan",
+      "starts": "2026/10/07 12:00:00",
+      "ends": "2026/10/07 14:00:00",
+      "active_status": "active",
+      "online_status": "active/online",
+      "descr": null
+    },
+    {
+      "id": 1,
+      "ip": "192.168.1.101",
+      "mac": "aa:bb:cc:dd:ee:11",
+      "hostname": "old-tv",
+      "if": "lan",
+      "starts": "2026/10/01 08:00:00",
+      "ends": "2026/10/01 10:00:00",
+      "active_status": "expired",
+      "online_status": "idle/offline",
+      "descr": null
+    },
+    {
+      "id": 2,
+      "ip": "192.168.1.20",
+      "mac": "aa:bb:cc:dd:ee:12",
+      "hostname": "nas",
+      "if": "lan",
+      "starts": "",
+      "ends": "",
+      "active_status": "static",
+      "online_status": "active/online",
+      "descr": "NAS"
+    },
+    {
+      "id": 3,
+      "ip": "10.0.20.7",
+      "mac": "aa:bb:cc:dd:ee:07",
+      "hostname": null,
+      "if": "opt1",
+      "starts": "2026/10/07 11:00:00",
+      "ends": "2026/10/07 13:00:00",
+      "active_status": "active",
+      "online_status": "active/online",
+      "descr": null
+    }
+  ],
+  "_links": {}
+}

@@ -1,0 +1,13 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": {
+    "version": "24.03-RELEASE",
+    "base": "24.03",
+    "patch": "1",
+    "buildtime": "Tue Mar 26 13:58:35 UTC 2024"
+  },
+  "_links": {}
+}

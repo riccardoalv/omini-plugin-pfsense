@@ -1,0 +1,25 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": [
+    {
+      "id": 0,
+      "if": "igc1",
+      "tag": 20,
+      "vlanif": "igc1.20",
+      "pcp": null,
+      "descr": "IoT devices"
+    },
+    {
+      "id": 1,
+      "if": "igc1",
+      "tag": 30,
+      "vlanif": "igc1.30",
+      "pcp": null,
+      "descr": ""
+    }
+  ],
+  "_links": {}
+}

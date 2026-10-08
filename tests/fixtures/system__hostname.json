@@ -1,0 +1,11 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": {
+    "hostname": "pfsense",
+    "domain": "home.arpa"
+  },
+  "_links": {}
+}

@@ -1,0 +1,41 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": [
+    {
+      "id": 0,
+      "name": "dhcpd",
+      "action": null,
+      "description": "DHCP Service",
+      "enabled": true,
+      "status": true
+    },
+    {
+      "id": 1,
+      "name": "unbound",
+      "action": null,
+      "description": "DNS Resolver",
+      "enabled": true,
+      "status": true
+    },
+    {
+      "id": 2,
+      "name": "ntpd",
+      "action": null,
+      "description": "NTP clock sync",
+      "enabled": true,
+      "status": false
+    },
+    {
+      "id": 3,
+      "name": "openvpn",
+      "action": null,
+      "description": "OpenVPN server: Road warriors",
+      "enabled": true,
+      "status": true
+    }
+  ],
+  "_links": {}
+}

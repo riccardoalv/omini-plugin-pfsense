@@ -1,0 +1,53 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": [
+    {
+      "id": 0,
+      "name": "tun_wg0",
+      "status": "up",
+      "public_key": "tunnelpublickeyAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "listen_port": "51820",
+      "mtu": 1420,
+      "transfer_rx": 1000,
+      "transfer_tx": 2000,
+      "inpkts": 10,
+      "outpkts": 20,
+      "descr": "Remote access",
+      "peers": [
+        {
+          "tunnel_device": "tun_wg0",
+          "public_key": "peerPhonePublicKeyBBBBBBBBBBBBBBBBBBBBBBBBB=",
+          "preshared_key": "(hidden)",
+          "endpoint": "198.51.100.9:40000",
+          "allowed_ips": [
+            "10.6.0.2/32"
+          ],
+          "latest_handshake": 1791374340,
+          "transfer_rx": 4096,
+          "transfer_tx": 8192,
+          "persistent_keepalive": "off",
+          "descr": "phone"
+        },
+        {
+          "tunnel_device": "tun_wg0",
+          "public_key": "peerLaptopPublicKeyCCCCCCCCCCCCCCCCCCCCCCCC=",
+          "preshared_key": "(none)",
+          "endpoint": "(none)",
+          "allowed_ips": [
+            "10.6.0.3/32",
+            "fd06::3/128"
+          ],
+          "latest_handshake": 0,
+          "transfer_rx": 0,
+          "transfer_tx": 0,
+          "persistent_keepalive": "off",
+          "descr": ""
+        }
+      ]
+    }
+  ],
+  "_links": {}
+}

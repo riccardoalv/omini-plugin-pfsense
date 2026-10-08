@@ -1,0 +1,34 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": [
+    {
+      "id": 0,
+      "name": "Road warriors UDP4:1194",
+      "mode": "server_tls_user",
+      "port": "1194",
+      "vpnid": 1,
+      "mgmt": "server1",
+      "conns": [
+        {
+          "common_name": "alice-laptop",
+          "remote_host": "198.51.100.7:51234",
+          "virtual_addr": "10.8.0.2",
+          "virtual_addr6": "",
+          "bytes_recv": 123456,
+          "bytes_sent": 654321,
+          "connect_time": "Wed Oct  7 10:00:00 2026",
+          "connect_time_unix": 1791367200,
+          "user_name": "alice",
+          "client_id": 0,
+          "peer_id": 0,
+          "cipher": "AES-256-GCM"
+        }
+      ],
+      "routes": []
+    }
+  ],
+  "_links": {}
+}

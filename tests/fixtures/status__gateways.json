@@ -1,0 +1,42 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": [
+    {
+      "id": 0,
+      "name": "WAN_DHCP",
+      "srcip": "203.0.113.10",
+      "monitorip": "203.0.113.1",
+      "delay": 1.234,
+      "stddev": 0.2,
+      "loss": 0,
+      "status": "online",
+      "substatus": "none"
+    },
+    {
+      "id": 1,
+      "name": "WAN2_DHCP",
+      "srcip": null,
+      "monitorip": null,
+      "delay": 0,
+      "stddev": null,
+      "loss": 100,
+      "status": "down",
+      "substatus": "down"
+    },
+    {
+      "id": 2,
+      "name": "LAN_ROUTER",
+      "srcip": "192.168.1.1",
+      "monitorip": "192.168.1.254",
+      "delay": 180.5,
+      "stddev": 12.1,
+      "loss": 2,
+      "status": "online",
+      "substatus": "delay"
+    }
+  ],
+  "_links": {}
+}

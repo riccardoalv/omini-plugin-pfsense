@@ -1,0 +1,31 @@
+id: pfsense
+name: pfSense
+version: 0.1.0
+protocol: 1
+entrypoint: main.py
+timeout_s: 60
+description: >-
+  pfSense CE and Plus firewalls through the pfSense REST API package (v2):
+  interfaces with link speed and traffic, WANs and gateway status, ARP, DHCP
+  leases and pool usage, VLANs, services, VPN peers, firewall states, CPU,
+  memory, swap, load, temperature and uptime. Read-only.
+author: Omini
+homepage: https://github.com/riccardoalv/omini-plugin-pfsense
+fields:
+  - key: url
+    type: url
+    label: Address
+    required: true
+    help: The pfSense web interface, e.g. https://192.168.1.1
+  - key: api_key
+    type: secret
+    label: API key
+    required: true
+    help: >-
+      A key of the REST API package, issued to a pfSense user that has only the
+      read privileges listed in the plugin's README.
+  - key: verify_tls
+    type: bool
+    label: Verify the TLS certificate
+    default: false
+    help: pfSense uses a self-signed certificate by default; turn this on if yours is trusted.

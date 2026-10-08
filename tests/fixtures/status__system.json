@@ -1,0 +1,32 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": {
+    "platform": "Netgate 4200",
+    "serial": "2213220123",
+    "netgate_id": "0123456789abcdef0123",
+    "uptime": "3 Days 04 Hours 12 Minutes 09 Seconds",
+    "bios_vendor": "INSYDE Corp.",
+    "bios_version": "03.00.00.04",
+    "bios_date": "03/04/2024",
+    "cpu_model": "Intel(R) Atom(TM) CPU C3338R @ 1.80GHz",
+    "kernel_pti": false,
+    "mds_mitigation": "inactive",
+    "temp_c": 48.5,
+    "temp_f": 119.3,
+    "cpu_load_avg": [
+      0.21,
+      0.18,
+      0.15
+    ],
+    "cpu_count": 4,
+    "cpu_usage": 5.25,
+    "mbuf_usage": 1.4,
+    "mem_usage": 23,
+    "swap_usage": 0,
+    "disk_usage": 7
+  },
+  "_links": {}
+}

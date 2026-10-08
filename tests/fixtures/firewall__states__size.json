@@ -1,0 +1,12 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": {
+    "maximumstates": 1622000,
+    "defaultmaximumstates": 1622000,
+    "currentstates": 1234
+  },
+  "_links": {}
+}

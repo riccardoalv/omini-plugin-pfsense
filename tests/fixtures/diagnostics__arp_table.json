@@ -1,0 +1,53 @@
+{
+  "code": 200,
+  "status": "ok",
+  "response_id": "SUCCESS",
+  "message": "",
+  "data": [
+    {
+      "id": 0,
+      "hostname": "phone",
+      "ip_address": "192.168.1.50",
+      "mac_address": "AA:BB:CC:DD:EE:01 <small>(Apple, Inc.)</small>",
+      "interface": "LAN",
+      "type": "ethernet",
+      "permanent": false,
+      "dnsresolve": "phone.home.arpa",
+      "expires": "Expires in 1185 seconds"
+    },
+    {
+      "id": 1,
+      "hostname": "",
+      "ip_address": "192.168.1.1",
+      "mac_address": "90:ec:77:aa:bb:02",
+      "interface": "LAN",
+      "type": "ethernet",
+      "permanent": true,
+      "dnsresolve": "pfsense.home.arpa",
+      "expires": "Permanent"
+    },
+    {
+      "id": 2,
+      "hostname": "",
+      "ip_address": "10.0.20.7",
+      "mac_address": "aa:bb:cc:dd:ee:07",
+      "interface": "IOT",
+      "type": "VLAN",
+      "permanent": false,
+      "dnsresolve": "",
+      "expires": "Expires in 600 seconds"
+    },
+    {
+      "id": 3,
+      "hostname": "",
+      "ip_address": "192.168.1.66",
+      "mac_address": "(Incomplete)",
+      "interface": "LAN",
+      "type": "ethernet",
+      "permanent": false,
+      "dnsresolve": "",
+      "expires": ""
+    }
+  ],
+  "_links": {}
+}
