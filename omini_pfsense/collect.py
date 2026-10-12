@@ -28,6 +28,7 @@ from omini_sdk import (
     log,
 )
 
+from omini_pfsense import networks as nets
 from omini_pfsense.client import Client, Forbidden, NotFound
 
 T = TypeVar("T")
@@ -52,6 +53,7 @@ ENDPOINTS = {
     "openvpn_clients": "/api/v2/status/openvpn/clients",
     "wireguard": "/api/v2/status/wireguard/tunnels",
     "ipsec": "/api/v2/status/ipsec/sas",
+    "networks": nets.INTERFACES,
 }
 
 
@@ -676,6 +678,32 @@ def temperatures(status: dict[str, Any]) -> list[Temperature] | None:
     return [Temperature(sensor="CPU", kind="cpu", celsius=celsius)]
 
 
+def wan_devices(ifaces: list[Interface]) -> set[str]:
+    """The WANs and what they ride on (igc0.2000 → igc0)."""
+    by_name = {i.name: i for i in ifaces}
+    out: set[str] = set()
+    for i in ifaces:
+        cur = i if i.wan else None
+        while cur is not None and cur.name not in out:
+            out.add(cur.name)
+            cur = by_name.get(cur.parent or "")
+    return out
+
+
+def router_networks(c: Client, ifaces: list[Interface], missing: list[str]) -> dict[str, Any]:
+    """Each VLAN's network and the DHCP server's fixed addresses (left out
+    with an Omini whose SDK does not know them yet)."""
+    if "networks" not in Device.model_fields:
+        return {}
+    st = optional("networks", missing, lambda: nets.read_state(c, wan_devices(ifaces)), None)
+    if not st:
+        return {}
+    return {
+        "networks": nets.networks(st) or None,
+        "dhcp_reservations": nets.reservations(st) or None,
+    }
+
+
 # --- plugin entry points -------------------------------------------------------
 
 
@@ -731,12 +759,88 @@ def collect(cfg: Config) -> list[Device]:
             services=optional("services", missing, lambda: services(c), []) or None,
             vpn_peers=vpn_peers(c, missing) or None,
             firewall_states=optional("states", missing, lambda: firewall_states(c), None),
+            **router_networks(c, ifaces, missing),
         )
         if missing:
             log.warning("missing privileges: %s", ", ".join(sorted(set(missing))))
         return [device]
     finally:
         c.close()
+
+
+CHANGES = ("network.set", "network.delete", "reservation.set", "reservation.delete")
+
+
+def apply(cfg: Config, change: Any) -> list[Device]:
+    """network.set: a VLAN's network (its VLAN on the port toward the switches,
+    the interface and gateway, the DHCP range, the access rules); network.delete
+    removes it; reservation.set and reservation.delete fix or free an address.
+    pfSense saves what the API changes; the plugin then reads the router again
+    until it serves what was asked (and removes a network it created that does
+    not come out as asked)."""
+    if change.kind not in CHANGES:
+        raise PluginError(f"this plugin cannot apply {change.kind}")
+    value = change.value if isinstance(change.value, dict) else dict(change.value)
+    c = client_from(cfg)
+    try:
+        system_status(c)
+        vlan_rows = optional("vlans", [], lambda: rows(c, "vlans"), [])
+        ifaces, _ = optional("interfaces", [], lambda: interfaces(c, vlan_rows), ([], {}))
+        wan = wan_devices(ifaces)
+
+        def state() -> nets.State:
+            return nets.read_state(c, wan) or nets.State()
+
+        st = nets.read_state(c, wan)
+        if st is None:
+            raise PluginError(
+                "changing networks needs the REST API package v2 and these privileges: "
+                + "; ".join(nets.WRITE_PRIVILEGES)
+            )
+        if change.kind == "reservation.set":
+            mac = nets.norm_mac(value.get("mac"))
+            nets.reserve(c, st, value)
+            nets.wait_for(
+                lambda: any(
+                    r["mac"] == mac and r["ip"] == value["ip"] for r in nets.reservations(state())
+                ),
+                "the reservation",
+            )
+        elif change.kind == "reservation.delete":
+            mac = nets.norm_mac(value.get("mac"))
+            nets.unreserve(c, st, mac)
+            nets.wait_for(
+                lambda: not any(r["mac"] == mac for r in nets.reservations(state())),
+                "the removal of the reservation",
+            )
+        elif change.kind == "network.set":
+            nets.check_mdns(value)
+            vid = int(value["vlan"])
+            new = nets.find(st, vid) is None
+            had_vlan = any(v["tag"] == vid for v in st.vlans.values())
+            try:
+                nets.apply_set(c, st, value)
+                nets.wait_for(lambda: nets.matches(nets.read_state(c, wan), value), "the network")
+            except PluginError:
+                if new and vid != 1:
+                    undo(c, wan, vid, had_vlan)
+                raise
+        else:
+            vid = int(value["vlan"])
+            nets.apply_delete(c, st, vid)
+            nets.wait_for(lambda: nets.find(state(), vid) is None, "the removal")
+    finally:
+        c.close()
+    return collect(cfg)
+
+
+def undo(c: Client, wan: set[str], vid: int, keep_vlan: bool) -> None:
+    """Removes what a network.set that failed had created (the VLAN only when
+    it was not there before)."""
+    try:
+        nets.remove(c, nets.read_state(c, wan) or nets.State(), vid, keep_vlan)
+    except Exception:
+        log.exception("could not remove what was created for VLAN %s", vid)
 
 
 def test(cfg: Config) -> str:

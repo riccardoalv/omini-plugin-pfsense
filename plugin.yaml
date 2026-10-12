@@ -1,6 +1,6 @@
 id: pfsense
 name: pfSense
-version: 0.1.0
+version: 0.2.0
 protocol: 1
 entrypoint: main.py
 timeout_s: 60
@@ -8,9 +8,16 @@ description: >-
   pfSense CE and Plus firewalls through the pfSense REST API package (v2):
   interfaces with link speed and traffic, WANs and gateway status, ARP, DHCP
   leases and pool usage, VLANs, services, VPN peers, firewall states, CPU,
-  memory, swap, load, temperature and uptime. Read-only.
+  memory, swap, load, temperature and uptime. It also manages each VLAN's
+  network (VLAN, interface, gateway, DHCP range and access rules) and the DHCP
+  server's fixed addresses, when its user has the write privileges.
 author: Omini
 homepage: https://github.com/riccardoalv/omini-plugin-pfsense
+changes:
+  - network.set
+  - network.delete
+  - reservation.set
+  - reservation.delete
 fields:
   - key: url
     type: url
@@ -23,7 +30,8 @@ fields:
     required: true
     help: >-
       A key of the REST API package, issued to a pfSense user that has only the
-      read privileges listed in the plugin's README.
+      privileges listed in the plugin's README (read only, or also the write
+      ones to change networks from Omini).
   - key: verify_tls
     type: bool
     label: Verify the TLS certificate
