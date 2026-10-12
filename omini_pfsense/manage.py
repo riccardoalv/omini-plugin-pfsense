@@ -13,7 +13,11 @@ pfSense yet. What the code relies on:
   the MAC; it changes nothing.
 - A paused device's addresses are entries of the host alias ``omini_paused``,
   each entry's ``detail`` "Omini <mac> <name>" (pfSense keeps a description
-  per address), so the alias alone says which MAC owns which address. Rules
+  per address), so the alias alone says which MAC owns which address: the
+  IPv4 ones Omini sent and the IPv6 ones the NDP table knows (``ndp -an``
+  through the command prompt, the only way the package offers, when the API
+  user may). The block rules (IPv4+IPv6) let the device reach ``omini_local``:
+  private IPv4, IPv6 link-local, ULA, multicast and the LAN-side IPv6 networks. Rules
   are added at the end of the interface's list (the API has no placement),
   so the block rules are floating and quick: pfSense evaluates them before
   any interface rule, whatever comes after.
@@ -218,9 +222,22 @@ def wake(
 
 DETAIL = re.compile(r"^Omini ([0-9a-f]{2}(?::[0-9a-f]{2}){5})(?: (.*))?$")
 
+# What a paused device still reaches: its own networks, IPv4 and IPv6.
+LOCAL_ALIAS = "omini_local"
+LOCAL_IPV6 = ["fe80::/10", "fc00::/7", "ff00::/8"]  # link-local, ULA, multicast
+STATUS_INTERFACES = "/api/v2/status/interfaces"
+# The package has no endpoint for the NDP table: it is read through the
+# command prompt, only when the API user was given that privilege.
+COMMAND_PROMPT = "/api/v2/diagnostics/command_prompt"
+NDP = "/usr/sbin/ndp -an"
+
 
 def paused_alias(aliases: list[dict[str, Any]]) -> dict[str, Any] | None:
     return next((a for a in aliases if text(a.get("name")) == PAUSED_ALIAS), None)
+
+
+def local_alias(aliases: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return next((a for a in aliases if text(a.get("name")) == LOCAL_ALIAS), None)
 
 
 def entries(alias: dict[str, Any] | None) -> list[tuple[str, str]]:
@@ -239,8 +256,13 @@ def owner(detail: str) -> tuple[str, str | None] | None:
     return (m.group(1), text(m.group(2)) or None) if m else None
 
 
+def mac_of(detail: str) -> str:
+    return (owner(detail) or ("", None))[0]
+
+
 def paused(alias: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Each paused MAC with its addresses, in the alias's order."""
+    """Each paused MAC with its IPv4 addresses (the ones Omini sent), in the
+    alias's order; its IPv6 entries come from the NDP table and are not reported."""
     out: dict[str, dict[str, Any]] = {}
     for address, detail in entries(alias):
         who = owner(detail)
@@ -248,7 +270,7 @@ def paused(alias: dict[str, Any] | None) -> list[dict[str, Any]]:
             continue
         mac, name = who
         d = out.setdefault(mac, {"mac": mac, "ips": [], "name": name})
-        if address not in d["ips"]:
+        if ipv4(address) and address not in d["ips"]:
             d["ips"].append(address)
     return list(out.values())
 
@@ -259,6 +281,34 @@ def detail_for(mac: str, name: Any) -> str:
     return f"{TAG} {mac} {clean}" if clean else f"{TAG} {mac}"
 
 
+def ipv6(value: Any) -> str | None:
+    """A device's IPv6 address worth blocking: not link-local."""
+    try:
+        a = ipaddress.IPv6Address(text(value).split("%")[0])
+    except ValueError:
+        return None
+    return None if a.is_link_local or a.is_multicast else str(a)
+
+
+def neighbours(c: Client) -> dict[str, list[str]] | None:
+    """MAC → IPv6 addresses, from the router's NDP table; None when it cannot
+    be read (the API user may not use the command prompt)."""
+    try:
+        out = c.post(COMMAND_PROMPT, {"command": NDP})
+    except (Forbidden, NotFound, PluginError) as e:
+        log.info("could not read the NDP table: %s", e)
+        return None
+    table: dict[str, list[str]] = {}
+    for line in text((out or {}).get("output") if isinstance(out, dict) else "").splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        ip, mac = ipv6(parts[0]), nets.norm_mac(parts[1])
+        if ip and mac and ip not in table.setdefault(mac, []):
+            table[mac].append(ip)
+    return table
+
+
 is_pause_rule = nets.is_pause_rule
 
 
@@ -267,13 +317,35 @@ def lan_side(st: nets.State) -> list[str]:
     return [a.ifname for a in st.assigned if a.enabled and not a.wan and a.device not in st.wan]
 
 
+def lan_ipv6(c: Client, st: nets.State) -> list[str]:
+    """The LAN-side interfaces' IPv6 networks (e.g. the ISP's prefix on the
+    LAN), as their status shows them; none when it cannot be read."""
+    lan = set(lan_side(st))
+    out = []
+    with contextlib.suppress(Forbidden, NotFound, PluginError):
+        for r in nets.rows(c, STATUS_INTERFACES):
+            if text(r.get("name")) not in lan:
+                continue
+            with contextlib.suppress(ValueError):
+                net = ipaddress.IPv6Interface(
+                    f"{text(r.get('ipaddrv6'))}/{text(r.get('subnetv6'))}"
+                ).network
+                if not net.is_link_local and str(net) not in out:
+                    out.append(str(net))
+    return out
+
+
+def local_networks(lan_v6: list[str]) -> list[str]:
+    return list(dict.fromkeys([*nets.PRIVATE_RANGES, *LOCAL_IPV6, *lan_v6]))
+
+
 def pause_rule(ifname: str) -> dict[str, Any]:
     return {
         "type": "block",
         "interface": [ifname],
-        "ipprotocol": "inet",
+        "ipprotocol": "inet46",
         "source": PAUSED_ALIAS,
-        "destination": f"!{nets.PRIVATE_ALIAS}",
+        "destination": f"!{LOCAL_ALIAS}",
         "floating": True,
         "quick": True,
         "direction": "in",
@@ -281,9 +353,20 @@ def pause_rule(ifname: str) -> dict[str, Any]:
     }
 
 
+def good(r: dict[str, Any]) -> bool:
+    """A block rule as this version writes it: IPv4 and IPv6, to the local alias.
+    Older ones (IPv4 only, to omini_private) are replaced at the next pause."""
+    return (
+        is_pause_rule(r)
+        and text(r.get("ipprotocol")) == "inet46"
+        and text(r.get("destination")) == f"!{LOCAL_ALIAS}"
+        and r.get("disabled") is not True
+    )
+
+
 def ruled(st: nets.State) -> set[str]:
     """The interfaces that have the block rule."""
-    return {i for r in st.rules or [] if is_pause_rule(r) for i in nets.interfaces_of(r)}
+    return {i for r in st.rules or [] if good(r) for i in nets.interfaces_of(r)}
 
 
 def read(c: Client, wan: set[str]) -> tuple[nets.State, list[dict[str, Any]]]:
@@ -314,9 +397,40 @@ def write_alias(c: Client, alias: dict[str, Any] | None, pairs: list[tuple[str, 
         nets.write(c.patch, nets.ALIAS, {"id": alias["id"], **body})
 
 
+def write_local_alias(c: Client, alias: dict[str, Any] | None, networks: list[str]) -> bool:
+    """The networks a paused device still reaches; whether it changed."""
+    if alias is not None and addresses(alias.get("address")) == networks:
+        return False
+    body = {"address": networks, "detail": ["Omini"] * len(networks)}
+    if alias is None:
+        nets.write(
+            c.post,
+            nets.ALIAS,
+            {
+                "name": LOCAL_ALIAS,
+                "type": "network",
+                "descr": f"{nets.PREFIX}local networks, IPv4 and IPv6",
+                **body,
+            },
+        )
+    else:
+        nets.write(c.patch, nets.ALIAS, {"id": alias["id"], **body})
+    return True
+
+
+def delete_rules(c: Client, rules: list[dict[str, Any]]) -> None:
+    """Ids are positions: the last first."""
+    for r in sorted(
+        (r for r in rules if isinstance(r.get("id"), int)), key=lambda r: r["id"], reverse=True
+    ):
+        nets.write(c.delete, nets.RULE, {"id": r["id"]})
+
+
 def pause_set(c: Client, wan: set[str], value: dict[str, Any]) -> None:
-    """Puts the MAC's addresses in the alias (replacing the ones it had) and
-    makes sure every LAN-side interface has the block rule."""
+    """Puts the MAC's addresses in the alias (replacing the ones it had): the
+    IPv4 ones Omini sent and the IPv6 ones the NDP table knows for the MAC;
+    the other paused devices' IPv6 entries are refreshed too. Makes sure every
+    LAN-side interface has the block rule (IPv4 and IPv6)."""
     mac = nets.norm_mac(value.get("mac"))
     if not mac:
         raise PluginError(f"{value.get('mac')!r} is not a MAC address")
@@ -332,26 +446,46 @@ def pause_set(c: Client, wan: set[str], value: dict[str, Any]) -> None:
         )
     alias = paused_alias(aliases)
     detail = detail_for(mac, value.get("name"))
-    # Another device's entry for one of these addresses is stale: the address moved.
-    keep = [
-        (a, d) for a, d in entries(alias) if a not in ips and (owner(d) or ("", None))[0] != mac
-    ]
-    pairs = keep + [(ip, detail) for ip in ips]
+    ndp = neighbours(c)
+    v6 = [ip for ip in (ipv6(i) for i in given) if ip]
+    v6 = list(dict.fromkeys([*v6, *(ndp or {}).get(mac, [])]))
+    keep: list[tuple[str, str]] = []
+    others: dict[str, str] = {}  # the other paused devices: MAC → detail
+    for a, d in entries(alias):
+        if a in ips or a in v6 or mac_of(d) == mac:
+            continue  # this device's (or an address that moved to it)
+        if mac_of(d):
+            others.setdefault(mac_of(d), d)
+            if ndp is not None and ipv6(a):
+                continue  # replaced by what the NDP table knows now
+        keep.append((a, d))
+    if ndp is not None:
+        for other, d in others.items():
+            keep += [(ip, d) for ip in ndp.get(other, []) if ip not in v6]
+    pairs = list(dict.fromkeys(keep + [(ip, detail) for ip in ips + v6]))
     changed = alias is None or pairs != entries(alias)
     if changed:
         write_alias(c, alias, pairs)
-    nets.ensure_private_alias(c)
-    missing = [i for i in lan_side(st) if i not in ruled(st)]
+    changed |= write_local_alias(c, local_alias(aliases), local_networks(lan_ipv6(c, st)))
+    old = [r for r in st.rules or [] if is_pause_rule(r) and not good(r)]
+    delete_rules(c, old)
+    have = ruled(st)
+    missing = [i for i in lan_side(st) if i not in have]
     for ifname in missing:
         nets.write(c.post, nets.RULE, pause_rule(ifname))
-    if changed or missing:
+    if changed or missing or old:
         nets.write(c.post, nets.FIREWALL_APPLY)
     cut(c, ips)
 
     def done() -> bool:
         st2, aliases2 = read(c, wan)
         now = next((p for p in paused(paused_alias(aliases2)) if p["mac"] == mac), None)
-        return bool(now) and set(now["ips"]) == set(ips) and set(lan_side(st2)) <= ruled(st2)
+        return (
+            bool(now)
+            and set(now["ips"]) == set(ips)
+            and local_alias(aliases2) is not None
+            and set(lan_side(st2)) <= ruled(st2)
+        )
 
     nets.wait_for(done, "the pause")
 
@@ -369,34 +503,34 @@ def cut(c: Client, ips: list[str]) -> None:
 
 
 def pause_delete(c: Client, wan: set[str], value: dict[str, Any]) -> None:
-    """Takes the MAC's addresses out of the alias; with no device left, the
-    block rules and the alias go too."""
+    """Takes the MAC's addresses (IPv4 and IPv6) out of the alias; with no
+    entry left, the block rules (of any version) and both aliases go too."""
     mac = nets.norm_mac(value.get("mac"))
     if not mac:
         raise PluginError(f"{value.get('mac')!r} is not a MAC address")
     st, aliases = read(c, wan)
     alias = paused_alias(aliases)
-    pairs = [(a, d) for a, d in entries(alias) if (owner(d) or ("", None))[0] != mac]
+    pairs = [(a, d) for a, d in entries(alias) if mac_of(d) != mac]
     if alias is None or pairs == entries(alias):
         return
     if pairs:
         write_alias(c, alias, pairs)
     else:
-        rules = sorted(
-            (r for r in st.rules or [] if is_pause_rule(r) and isinstance(r.get("id"), int)),
-            key=lambda r: r["id"],
-            reverse=True,
-        )
-        for r in rules:
-            nets.write(c.delete, nets.RULE, {"id": r["id"]})
+        delete_rules(c, [r for r in st.rules or [] if is_pause_rule(r)])
         nets.write(c.delete, nets.ALIAS, {"id": alias["id"]})
+        # Ids are positions: read again for the local alias's.
+        local = local_alias(nets.rows(c, nets.ALIASES))
+        if local is not None:
+            nets.write(c.delete, nets.ALIAS, {"id": local["id"]})
     nets.write(c.post, nets.FIREWALL_APPLY)
 
     def done() -> bool:
         st2, aliases2 = read(c, wan)
         alias2 = paused_alias(aliases2)
         gone = all(p["mac"] != mac for p in paused(alias2))
-        return gone and (bool(entries(alias2)) or not ruled(st2))
+        return gone and (
+            bool(entries(alias2)) or not any(is_pause_rule(r) for r in st2.rules or [])
+        )
 
     nets.wait_for(done, "the end of the pause")
 

@@ -46,6 +46,10 @@ class Box(Router):
             }
         ]
         self.dns_applied = 0
+        # `ndp -an` through the command prompt; None: the package answers 404.
+        self.ndp = None
+        self.commands = []
+        self.status_interfaces = None  # None: the fixture's
         self.dns_lag = 0  # reads that still show the old host overrides after a change
         self._stale = None
 
@@ -55,6 +59,8 @@ class Box(Router):
             if self.dns_lag > 0:
                 self.dns_lag -= 1
             return ok([{"id": i, **copy.deepcopy(o)} for i, o in enumerate(rows)])
+        if path == "/api/v2/status/interfaces" and self.status_interfaces is not None:
+            return ok(self.status_interfaces)
         if path == "/api/v2/interface/laggs":
             return ok([{"id": i, **lg} for i, lg in enumerate(self.laggs)])
         return super().get(path)
@@ -85,6 +91,11 @@ class Box(Router):
             if any(name in (r.get("source"), r.get("destination")) for r in self.rules):
                 return error(409, "conflict", "ALIAS_IN_USE", "Alias is in use")
             return ok(self.aliases.pop(int(q["id"])))
+        if (method, path) == ("POST", "/api/v2/diagnostics/command_prompt"):
+            self.commands.append(body["command"])
+            if self.ndp is None:
+                return error(404, "not found", "ENDPOINT_NOT_FOUND", "Endpoint not found")
+            return ok({"output": self.ndp, "result_code": 0})
         if (method, path) == ("DELETE", "/api/v2/firewall/states"):
             self.killed.append(q)
             return ok([])
@@ -94,8 +105,11 @@ class Box(Router):
         return [r for r in self.rules if r.get("source") == "omini_paused"]
 
     def paused(self):
-        a = next((a for a in self.aliases if a["name"] == "omini_paused"), None)
+        a = self.alias("omini_paused")
         return None if a is None else list(zip(a["address"], a["detail"], strict=True))
+
+    def alias(self, name):
+        return next((a for a in self.aliases if a["name"] == name), None)
 
 
 @pytest.fixture
@@ -291,17 +305,32 @@ def test_pauses_a_device(box, cfg):
     assert box.paused() == [("192.168.1.50", "Omini aa:bb:cc:00:00:50 Kid's tablet")]
     alias = next(a for a in box.aliases if a["name"] == "omini_paused")
     assert alias["type"] == "host"
-    assert any(a["name"] == "omini_private" for a in box.aliases)
+    # What the device still reaches: private IPv4, IPv6 link-local, ULA,
+    # multicast and the LAN's IPv6 network (from the interfaces' status).
+    local = box.alias("omini_local")
+    assert (local["type"], local["address"]) == (
+        "network",
+        [
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "fe80::/10",
+            "fc00::/7",
+            "ff00::/8",
+            "fd00::/64",
+        ],
+    )
     rules = box.pause_rules()
     assert sorted(r["interface"][0] for r in rules) == ["lan", "opt1", "opt2"]  # never the WAN
     for r in rules:
-        assert (r["type"], r["destination"], r["floating"], r["quick"], r["direction"]) == (
-            "block",
-            "!omini_private",
-            True,
-            True,
-            "in",
-        )
+        assert (
+            r["type"],
+            r["ipprotocol"],
+            r["destination"],
+            r["floating"],
+            r["quick"],
+            r["direction"],
+        ) == ("block", "inet46", "!omini_local", True, True, "in")
         assert r["descr"].startswith("Omini")
     assert "/api/v2/firewall/apply" in box.applied
     assert box.killed == [
@@ -323,6 +352,7 @@ def test_pausing_again_replaces_the_addresses(box, cfg):
         ("192.168.1.60", "Omini aa:bb:cc:00:00:60 TV"),
         ("192.168.1.51", "Omini aa:bb:cc:00:00:50 Kid's tablet"),
         ("10.0.20.51", "Omini aa:bb:cc:00:00:50 Kid's tablet"),
+        ("fd00::51", "Omini aa:bb:cc:00:00:50 Kid's tablet"),  # blocked, not reported
     ]
     assert len(box.pause_rules()) == rules  # one rule per interface, not per device
     assert [(p.mac, p.ips) for p in devices[0].paused] == [
@@ -386,10 +416,123 @@ def test_resumes_a_device(box, cfg):
     assert [p.mac for p in devices[0].paused] == ["aa:bb:cc:00:00:50"]
 
     devices = collect_module.apply(cfg, change("pause.delete", {"mac": "aa:bb:cc:00:00:50"}))
-    assert box.paused() is None  # the alias goes with the last device
+    assert box.paused() is None  # the aliases go with the last device
+    assert box.alias("omini_local") is None
     assert box.pause_rules() == []
     assert devices[0].paused is None
     assert networks(devices)[1].access == "all"
+
+
+NDP = """Neighbor                             Linklayer Address  Netif Expire    1s 5s
+fe80::1:2%igc1                       aa:bb:cc:00:00:50   igc1 23h59m58s S
+2804:1128:bd7c:8800:1c2b:3d4e:5f60:7181 aa:bb:cc:00:00:50 igc1 23h59m58s S
+2804:1128:bd7c:8800::60              aa:bb:cc:00:00:60   igc1 23h59m50s S
+2804:1128:bd7c:8800::1               90:ec:77:aa:bb:02   igc1 permanent R
+fd00::99                             (incomplete)        igc1 expired   N
+"""
+
+
+def test_the_ndp_table_adds_the_devices_ipv6_addresses(box, cfg):
+    """A phone with a temporary IPv6 address: the NDP table says it is the
+    MAC's, so it goes in the alias with the IPv4 address Omini sent."""
+    box.ndp = NDP
+    collect_module.apply(cfg, pause(mac="aa:bb:cc:00:00:60", ips=["192.168.1.60"], name="TV"))
+    devices = collect_module.apply(cfg, pause())
+    assert box.commands[-1] == "/usr/sbin/ndp -an"
+    assert box.paused() == [
+        ("192.168.1.60", "Omini aa:bb:cc:00:00:60 TV"),
+        ("2804:1128:bd7c:8800::60", "Omini aa:bb:cc:00:00:60 TV"),
+        ("192.168.1.50", "Omini aa:bb:cc:00:00:50 Kid's tablet"),
+        ("2804:1128:bd7c:8800:1c2b:3d4e:5f60:7181", "Omini aa:bb:cc:00:00:50 Kid's tablet"),
+    ]
+    # Reported as Omini sent it: the IPv4 address only.
+    assert [(p.mac, p.ips) for p in devices[0].paused] == [
+        ("aa:bb:cc:00:00:60", ["192.168.1.60"]),
+        ("aa:bb:cc:00:00:50", ["192.168.1.50"]),
+    ]
+    # A new temporary address: the next pause.set (any device's) refreshes them all.
+    box.ndp = NDP.replace("::60 ", "::61 ").replace("7181", "7182")
+    collect_module.apply(cfg, pause())
+    assert [a for a, _ in box.paused()] == [
+        "192.168.1.60",
+        "2804:1128:bd7c:8800::61",
+        "192.168.1.50",
+        "2804:1128:bd7c:8800:1c2b:3d4e:5f60:7182",
+    ]
+    # The router's own IPv6 network stays reachable: it is in omini_local.
+    status = [{"name": "lan", "ipaddrv6": "2804:1128:bd7c:8800::1", "subnetv6": "64"}]
+    box.status_interfaces = status
+    collect_module.apply(cfg, pause())
+    assert "2804:1128:bd7c:8800::/64" in box.alias("omini_local")["address"]
+    # Resuming takes the IPv6 entries out with the IPv4 one.
+    collect_module.apply(cfg, change("pause.delete", {"mac": "aa:bb:cc:00:00:50"}))
+    assert {d for _, d in box.paused()} == {"Omini aa:bb:cc:00:00:60 TV"}
+
+
+def test_without_the_ndp_table_the_ipv6_entries_stay(box, cfg):
+    """No command prompt privilege: IPv4 is paused; IPv6 entries already in
+    the alias are kept, since nothing says they changed."""
+    box.ndp = NDP
+    collect_module.apply(cfg, pause(mac="aa:bb:cc:00:00:60", ips=["192.168.1.60"], name="TV"))
+    box.ndp = None
+    box.forbidden.add(("POST", "/api/v2/diagnostics/command_prompt"))
+    devices = collect_module.apply(cfg, pause())
+    assert box.paused() == [
+        ("192.168.1.60", "Omini aa:bb:cc:00:00:60 TV"),
+        ("2804:1128:bd7c:8800::60", "Omini aa:bb:cc:00:00:60 TV"),
+        ("192.168.1.50", "Omini aa:bb:cc:00:00:50 Kid's tablet"),
+    ]
+    assert [p.mac for p in devices[0].paused] == ["aa:bb:cc:00:00:60", "aa:bb:cc:00:00:50"]
+
+
+def old_pause(box):
+    """A pause made by 0.2.0: IPv4 rules to anything not omini_private."""
+    box.aliases.append(
+        {
+            "name": "omini_private",
+            "type": "network",
+            "address": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+            "detail": ["Omini"] * 3,
+        }
+    )
+    box.aliases.append(
+        {
+            "name": "omini_paused",
+            "type": "host",
+            "address": ["192.168.1.60"],
+            "detail": ["Omini aa:bb:cc:00:00:60 TV"],
+        }
+    )
+    for ifname in ("lan", "opt1", "opt2"):
+        box.rules.append(
+            {
+                "type": "block",
+                "interface": [ifname],
+                "ipprotocol": "inet",
+                "source": "omini_paused",
+                "destination": "!omini_private",
+                "floating": True,
+                "quick": True,
+                "direction": "in",
+            }
+        )
+
+
+def test_an_older_pause_moves_to_ipv4_and_ipv6_rules(box, cfg):
+    old_pause(box)
+    devices = collect_module.apply(cfg, pause())
+    rules = box.pause_rules()
+    assert sorted(r["interface"][0] for r in rules) == ["lan", "opt1", "opt2"]
+    assert {(r["ipprotocol"], r["destination"]) for r in rules} == {("inet46", "!omini_local")}
+    assert {p.mac for p in devices[0].paused} == {"aa:bb:cc:00:00:60", "aa:bb:cc:00:00:50"}
+
+
+def test_an_older_pause_still_resumes(box, cfg):
+    old_pause(box)
+    devices = collect_module.apply(cfg, change("pause.delete", {"mac": "aa:bb:cc:00:00:60"}))
+    assert devices[0].paused is None
+    assert box.pause_rules() == [] and box.paused() is None
+    assert box.alias("omini_private") is not None  # the networks' access uses it
 
 
 def test_resuming_a_device_that_is_not_paused_changes_nothing(box, cfg):

@@ -23,7 +23,7 @@
 | DHCP static mappings | Fixed addresses |
 | LAGGs: each member port and its LAGG (`lagg0`) | Cables of a LAG drawn as one link |
 | DNS Resolver host overrides (and their aliases), IPv4; the system domain | Local DNS names, and the domain new names get |
-| The alias `omini_paused` | Devices whose internet is paused |
+| The alias `omini_paused` | Devices whose internet is paused (their IPv4 addresses) |
 
 ## Requirements
 
@@ -150,8 +150,8 @@ Changes are applied only when you confirm one in Omini (Omini's guarded changes)
 | **dns.set** | A DNS Resolver host override for the name (`POST /api/v2/services/dns_resolver/host_override` with `host`, `domain`, `ip` and description *Omini*), or the address of the one with that exact name changed (`PATCH`, its description kept; a second override of the same name is removed); then `POST /api/v2/services/dns_resolver/apply`. A name that is an alias of another override is refused (change it in pfSense) |
 | **dns.delete** | Removes the host overrides with that name (`DELETE …/host_override`), then applies |
 | **wol.send** | `POST /api/v2/services/wake_on_lan/send` with the interface whose network holds the device's address (the LAN without one; never a WAN) and the MAC. Nothing is changed or saved |
-| **pause.set** | Puts the device's IPv4 addresses in the host alias `omini_paused` (`POST`/`PATCH /api/v2/firewall/alias`; each address's description is `Omini <MAC> <name>`, so the alias says which device each one is), replacing the ones the MAC had; makes sure each interface but the WANs has the block rule (below; `POST /api/v2/firewall/rule`); `POST /api/v2/firewall/apply`; then removes the device's open connections (`DELETE /api/v2/firewall/states` with `source__startswith=<ip>:` and, for NATed ones, `source__contains=(<ip>:`), best effort. pfSense's own addresses are refused |
-| **pause.delete** | Takes the MAC's addresses out of the alias; when it is left empty, removes the block rules and the alias (`DELETE /api/v2/firewall/rule`, `DELETE /api/v2/firewall/alias`); applies |
+| **pause.set** | Puts the device's addresses in the host alias `omini_paused` (`POST`/`PATCH /api/v2/firewall/alias`; each address's description is `Omini <MAC> <name>`, so the alias says which device each one is), replacing the ones the MAC had: the IPv4 addresses Omini sent and the device's IPv6 addresses from the router's NDP table (when the API user may read it, below); the other paused devices' IPv6 entries are refreshed from the NDP table at the same time. Writes the network alias `omini_local` (what a paused device still reaches); makes sure each interface but the WANs has the block rule (below; `POST /api/v2/firewall/rule`), replacing the IPv4-only rules of 0.2.0; `POST /api/v2/firewall/apply`; then removes the device's open IPv4 connections (`DELETE /api/v2/firewall/states` with `source__startswith=<ip>:` and, for NATed ones, `source__contains=(<ip>:`), best effort. pfSense's own addresses are refused |
+| **pause.delete** | Takes the MAC's addresses (IPv4 and IPv6) out of the alias; when it is left empty, removes the block rules and both aliases `omini_paused` and `omini_local` (`DELETE /api/v2/firewall/rule`, `DELETE /api/v2/firewall/alias`); applies. A device paused by 0.2.0 resumes the same way |
 
 **Access** is read from the interface's enabled rules; these exact sets are the presets, anything else is *custom* and is never touched:
 
@@ -161,7 +161,9 @@ Changes are applied only when you confirm one in Omini (Omini's guarded changes)
 | Everything | pass to any (pfSense's default LAN rules, IPv4 and IPv6, read as this) |
 | Its own network | pass TCP/UDP 53 to the gateway only |
 
-**Paused devices**: one rule per interface but the WANs, *block, IPv4, source `omini_paused`, destination not `omini_private`* (10/8, 172.16/12, 192.168/16), description *Omini: paused devices, no internet*. The API adds rules at the end of an interface's list and cannot move them, so they are **floating rules with quick** on that interface (direction in): pfSense evaluates them before every interface rule, so the device keeps reaching its own and the other private networks and loses only the internet. They are not part of a network's *access*, and changing a network's access keeps them. A network created after a device was paused gets its rule at the next pause.
+**Paused devices**: one rule per interface but the WANs, *block, IPv4+IPv6 (`inet46`), source `omini_paused`, destination not `omini_local`*, description *Omini: paused devices, no internet*. `omini_local` holds the private IPv4 ranges (10/8, 172.16/12, 192.168/16), IPv6 link-local `fe80::/10`, ULA `fc00::/7` and multicast `ff00::/8`, and the IPv6 networks of the interfaces but the WANs as their status shows them (e.g. the ISP's prefix on the LAN), refreshed at every pause. The API adds rules at the end of an interface's list and cannot move them, so they are **floating rules with quick** on that interface (direction in): pfSense evaluates them before every interface rule, so the device keeps reaching its own and the other local networks and loses only the internet, over IPv4 and IPv6. They are not part of a network's *access*, and changing a network's access keeps them. A network created after a device was paused gets its rule at the next pause.
+
+**IPv6 of a paused device**: pfSense's rules cannot match a MAC, so the device's IPv6 addresses (SLAAC, including the temporary/privacy ones that change) must be in the alias. The REST API package has no endpoint for the NDP table, so the plugin reads it with `ndp -an` through `POST /api/v2/diagnostics/command_prompt` — **only if you give the user that privilege**, which lets the key run any shell command on the firewall as root. Without it a paused device is blocked over IPv4 only (and over any IPv6 address already in the alias), and can still reach the internet over IPv6 if the network has it. The addresses are those the router has seen when the pause is applied: a temporary address the device makes later is blocked only from the next `pause.set` (Omini re-sends it when a paused device's IPv4 address changes, not when its IPv6 ones do).
 
 **Discovery between networks (mDNS)** is not supported: pfSense's repeater is the Avahi package, which the REST API does not configure. Turn it on in **Services → Avahi**; asking Omini to turn it on fails with that hint.
 
@@ -192,6 +194,8 @@ Add these to the Omini user (System → User Manager → the user → *Effective
 | *Pausing devices* (with the interfaces, rules and firewall apply ones above) | |
 | REST API - /api/v2/firewall/alias PATCH / DELETE | `api-v2-firewall-alias-patch`, `-delete` |
 | REST API - /api/v2/firewall/states DELETE | `api-v2-firewall-states-delete` (optional: without it open connections last until they close) |
+| REST API - /api/v2/status/interfaces GET | `api-v2-status-interfaces-get` (the LAN-side IPv6 networks a paused device still reaches; already in the read privileges) |
+| REST API - /api/v2/diagnostics/command_prompt POST | `api-v2-diagnostics-command-prompt-post` (optional, **runs any shell command**: only to pause over IPv6, see *IPv6 of a paused device*) |
 
 These let the key change interfaces, DHCP and firewall rules anywhere on the firewall; Omini only ever touches what it is asked to (see the table above). Still do not give the user *WebCfg - All pages*.
 
@@ -206,7 +210,7 @@ The changes follow the package's [OpenAPI schema](https://pfrest.org/api-docs/op
 - `/api/v2/interface/apply` applies every pending interface change, including ones made by hand and not applied yet.
 - DNS: host override fields `host`/`domain`/`ip[]`/`descr`/`aliases[]` and positional ids; that `…/dns_resolver/apply` makes Unbound answer at once (the plugin reads the overrides back, not the resolver's answers).
 - Wake-on-LAN: that `interface` takes pfSense's interface name (`lan`, `opt1`) and `mac_addr` a colon-separated MAC.
-- Pausing: alias `address[]`/`detail[]` kept in step and returned as lists; `PATCH` replacing both; rule fields `floating`/`quick`/`direction: in` with an inverted alias destination (`!omini_private`); that a floating quick block on an interface is evaluated before that interface's own pass rules (pfSense's documented order); the state-kill filters `source__startswith` and `source__contains` on `DELETE /api/v2/firewall/states`, and the `ip:port` / `wan:port (ip:port)` shape of a state's `source`.
+- Pausing: alias `address[]`/`detail[]` kept in step and returned as lists; `PATCH` replacing both; rule fields `floating`/`quick`/`direction: in`/`ipprotocol: inet46` with an inverted alias destination (`!omini_local`); that a host alias takes IPv6 addresses and a network alias IPv6 networks next to IPv4 ones; the `output` of `POST /api/v2/diagnostics/command_prompt` and the column layout of FreeBSD's `ndp -an` (address, MAC); `ipaddrv6`/`subnetv6` of `/api/v2/status/interfaces` for a tracked (DHCPv6-PD) LAN; that a floating quick block on an interface is evaluated before that interface's own pass rules (pfSense's documented order); the state-kill filters `source__startswith` and `source__contains` on `DELETE /api/v2/firewall/states`, and the `ip:port` / `wan:port (ip:port)` shape of a state's `source`.
 - LAGGs: `GET /api/v2/interface/laggs` with `laggif` and `members[]` as real port names.
 
 ## Known limitations
