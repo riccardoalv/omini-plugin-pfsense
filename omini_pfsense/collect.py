@@ -28,6 +28,7 @@ from omini_sdk import (
     log,
 )
 
+from omini_pfsense import manage
 from omini_pfsense import networks as nets
 from omini_pfsense.client import Client, Forbidden, NotFound
 
@@ -54,6 +55,9 @@ ENDPOINTS = {
     "wireguard": "/api/v2/status/wireguard/tunnels",
     "ipsec": "/api/v2/status/ipsec/sas",
     "networks": nets.INTERFACES,
+    "dns": manage.HOST_OVERRIDES,
+    "aliases": nets.ALIASES,
+    "laggs": manage.LAGGS,
 }
 
 
@@ -690,6 +694,48 @@ def wan_devices(ifaces: list[Interface]) -> set[str]:
     return out
 
 
+def add_laggs(ifaces: list[Interface], lagg_rows: list[dict[str, Any]]) -> list[Interface]:
+    """Each LAGG member port gets its LAGG's name. pfSense lists only assigned
+    interfaces, and a member can never be assigned: members (and an
+    unassigned LAGG) are added with what the LAGG says of them."""
+    if "lag" not in Interface.model_fields:
+        return ifaces
+    out = list(ifaces)
+    by_name = {i.name: i for i in out}
+    for r in lagg_rows:
+        lagg = text(r.get("laggif"))
+        if not lagg:
+            continue
+        if lagg not in by_name:
+            by_name[lagg] = Interface(name=lagg, type="lag", description=text(r.get("descr")))
+            out.append(by_name[lagg])
+        for m in r.get("members") or []:
+            m = text(m)
+            if not m or m == lagg:
+                continue
+            if m not in by_name:
+                by_name[m] = Interface(name=m, type=interface_type(m))
+                out.append(by_name[m])
+            by_name[m].lag = lagg
+    return out
+
+
+def router_names(
+    c: Client, names: dict[str, Any], ifaces: list[Interface], missing: list[str]
+) -> dict[str, Any]:
+    """Local DNS names (host overrides), the domain and the paused devices
+    (left out with an Omini whose SDK does not know them yet)."""
+    if "dns_records" not in Device.model_fields:
+        return {}
+    records = optional("dns", missing, lambda: manage.dns_records(manage.overrides(c)), [])
+    aliases = optional("aliases", missing, lambda: nets.rows(c, nets.ALIASES), [])
+    return {
+        "dns_records": records or None,
+        "dns_domain": text(names.get("domain")),
+        "paused": manage.paused(manage.paused_alias(aliases)) or None,
+    }
+
+
 def router_networks(c: Client, ifaces: list[Interface], missing: list[str]) -> dict[str, Any]:
     """Each VLAN's network and the DHCP server's fixed addresses (left out
     with an Omini whose SDK does not know them yet)."""
@@ -718,6 +764,7 @@ def collect(cfg: Config) -> list[Device]:
         ifaces, by_name = optional(
             "interfaces", missing, lambda: interfaces(c, vlan_rows), ([], {})
         )
+        ifaces = add_laggs(ifaces, optional("laggs", missing, lambda: rows(c, "laggs"), []))
         host = urlparse(c.base).hostname or c.base
         lan = by_name.get("lan") or {}
         macs = sorted({i.mac for i in ifaces if i.mac})
@@ -760,6 +807,7 @@ def collect(cfg: Config) -> list[Device]:
             vpn_peers=vpn_peers(c, missing) or None,
             firewall_states=optional("states", missing, lambda: firewall_states(c), None),
             **router_networks(c, ifaces, missing),
+            **router_names(c, names, ifaces, missing),
         )
         if missing:
             log.warning("missing privileges: %s", ", ".join(sorted(set(missing))))
@@ -768,16 +816,28 @@ def collect(cfg: Config) -> list[Device]:
         c.close()
 
 
-CHANGES = ("network.set", "network.delete", "reservation.set", "reservation.delete")
+CHANGES = (
+    "network.set",
+    "network.delete",
+    "reservation.set",
+    "reservation.delete",
+    "dns.set",
+    "dns.delete",
+    "wol.send",
+    "pause.set",
+    "pause.delete",
+)
 
 
 def apply(cfg: Config, change: Any) -> list[Device]:
     """network.set: a VLAN's network (its VLAN on the port toward the switches,
     the interface and gateway, the DHCP range, the access rules); network.delete
-    removes it; reservation.set and reservation.delete fix or free an address.
-    pfSense saves what the API changes; the plugin then reads the router again
-    until it serves what was asked (and removes a network it created that does
-    not come out as asked)."""
+    removes it; reservation.set and reservation.delete fix or free an address;
+    dns.set and dns.delete a DNS Resolver host override; wol.send a magic
+    packet; pause.set and pause.delete a device's addresses in the alias of
+    paused devices (with its block rules). pfSense saves what the API changes;
+    the plugin then reads the router again until it serves what was asked (and
+    removes a network it created that does not come out as asked)."""
     if change.kind not in CHANGES:
         raise PluginError(f"this plugin cannot apply {change.kind}")
     value = change.value if isinstance(change.value, dict) else dict(change.value)
@@ -785,8 +845,11 @@ def apply(cfg: Config, change: Any) -> list[Device]:
     try:
         system_status(c)
         vlan_rows = optional("vlans", [], lambda: rows(c, "vlans"), [])
-        ifaces, _ = optional("interfaces", [], lambda: interfaces(c, vlan_rows), ([], {}))
+        ifaces, by_name = optional("interfaces", [], lambda: interfaces(c, vlan_rows), ([], {}))
         wan = wan_devices(ifaces)
+        if change.kind in ("dns.set", "dns.delete", "wol.send", "pause.set", "pause.delete"):
+            apply_other(c, change.kind, value, by_name, wan)
+            return collect(cfg)
 
         def state() -> nets.State:
             return nets.read_state(c, wan) or nets.State()
@@ -832,6 +895,26 @@ def apply(cfg: Config, change: Any) -> list[Device]:
     finally:
         c.close()
     return collect(cfg)
+
+
+def apply_other(
+    c: Client, kind: str, value: dict[str, Any], by_name: dict[str, dict[str, Any]], wan: set[str]
+) -> None:
+    try:
+        if kind == "dns.set":
+            manage.dns_set(c, value)
+        elif kind == "dns.delete":
+            manage.dns_delete(c, value)
+        elif kind == "wol.send":
+            manage.wake(c, by_name, wan, value)
+        elif kind == "pause.set":
+            manage.pause_set(c, wan, value)
+        else:
+            manage.pause_delete(c, wan, value)
+    except Forbidden as e:  # a read the change needs
+        raise PluginError(f"give the API user the privilege {e.privilege}") from e
+    except NotFound as e:
+        raise PluginError(f"this REST API package has no {e} endpoint: update the package") from e
 
 
 def undo(c: Client, wan: set[str], vid: int, keep_vlan: bool) -> None:

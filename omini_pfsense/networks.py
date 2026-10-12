@@ -75,6 +75,8 @@ WRITE_PRIVILEGES = [
 # The private ranges, an alias the "Internet only" rules block.
 PRIVATE_ALIAS = "omini_private"
 PRIVATE_RANGES = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+# The alias of paused devices; its block rules are Omini's and no access preset.
+PAUSED_ALIAS = "omini_paused"
 # What Omini writes starts with this, so a person reading it knows.
 PREFIX = "Omini: "
 
@@ -169,7 +171,8 @@ def dhcp_of(st: State, ifname: str) -> dict[str, Any] | None:
     lo, hi = text(server.get("range_from")), text(server.get("range_to"))
     if not lo or not hi:
         return {"enabled": False}
-    return {"enabled": True, "from": lo, "to": hi}
+    # pfSense refuses a static mapping inside the DHCP range.
+    return {"enabled": True, "from": lo, "to": hi, "reserve_in_range": False}
 
 
 def interfaces_of(r: dict[str, Any]) -> list[str]:
@@ -179,10 +182,18 @@ def interfaces_of(r: dict[str, Any]) -> list[str]:
     return [text(v) for v in value or [] if text(v)]
 
 
+def is_pause_rule(r: dict[str, Any]) -> bool:
+    """A rule that blocks the paused devices (pause.set), on top of any access."""
+    return text(r.get("source")) == PAUSED_ALIAS
+
+
 def rules_on(st: State, ifname: str) -> list[dict[str, Any]]:
-    """The enabled rules that match traffic coming in on the interface."""
+    """The enabled rules that match traffic coming in on the interface (but
+    the paused devices' block)."""
     return [
-        r for r in st.rules or [] if ifname in interfaces_of(r) and r.get("disabled") is not True
+        r
+        for r in st.rules or []
+        if ifname in interfaces_of(r) and r.get("disabled") is not True and not is_pause_rule(r)
     ]
 
 
@@ -429,10 +440,17 @@ def preset_rules(access: str, ifname: str, name: str) -> list[dict[str, Any]]:
     return [dns]  # local: its own network only
 
 
-def delete_rules(c: Client, st: State, ifname: str) -> bool:
-    """Removes the interface's rules, the last first (ids are positions)."""
+def delete_rules(c: Client, st: State, ifname: str, keep_pause: bool = False) -> bool:
+    """Removes the interface's rules, the last first (ids are positions); with
+    keep_pause, the paused devices' block stays."""
     found = sorted(
-        (r for r in st.rules or [] if ifname in interfaces_of(r) and isinstance(r.get("id"), int)),
+        (
+            r
+            for r in st.rules or []
+            if ifname in interfaces_of(r)
+            and isinstance(r.get("id"), int)
+            and not (keep_pause and is_pause_rule(r))
+        ),
         key=lambda r: r["id"],
         reverse=True,
     )
@@ -455,7 +473,7 @@ def set_access(c: Client, st: State, ifname: str, access: str | None, name: str)
         return
     if access == "internet":
         ensure_private_alias(c)
-    delete_rules(c, st, ifname)
+    delete_rules(c, st, ifname, keep_pause=True)
     for r in preset_rules(access, ifname, name):
         write(c.post, RULE, r)
     write(c.post, FIREWALL_APPLY)
@@ -590,6 +608,13 @@ def reserve(c: Client, st: State, want: dict[str, Any]) -> None:
     )
     if ifname is None or (dhcp_of(st, ifname) or {}).get("enabled") is not True:
         raise PluginError(f"no DHCP server hands out {ip}: turn DHCP on in that network first")
+    dhcp = dhcp_of(st, ifname) or {}
+    lo, hi = dhcp.get("from"), dhcp.get("to")
+    if lo and hi and ipaddress.IPv4Address(lo) <= addr <= ipaddress.IPv4Address(hi):
+        raise PluginError(
+            f"pfSense does not fix an address inside the DHCP range ({lo} to {hi}): "
+            "pick one outside it"
+        )
     body = {"mac": mac, "ipaddr": ip, "hostname": hostname(str(want.get("name") or ""))}
     current = [(i, m) for i, m in mappings(st) if norm_mac(m.get("mac")) == mac]
     same = next((m for i, m in current if i == ifname), None)

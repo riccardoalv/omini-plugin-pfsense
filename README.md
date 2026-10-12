@@ -1,6 +1,6 @@
 # omini-plugin-pfsense
 
-[Omini](https://github.com/riccardoalv/omini) plugin for **pfSense** (CE and Plus), through the [pfSense REST API package](https://pfrest.org/) (v2). Each collection only reads (`GET`). It changes the firewall only when you apply a change from Omini — a VLAN's network or a fixed DHCP address, see [What it changes](#what-it-changes) — and only if its user has the write privileges; without them it stays read-only.
+[Omini](https://github.com/riccardoalv/omini) plugin for **pfSense** (CE and Plus), through the [pfSense REST API package](https://pfrest.org/) (v2). Each collection only reads (`GET`). It changes the firewall only when you apply a change from Omini — a VLAN's network, a fixed DHCP address, a local DNS name, a paused device or a Wake-on-LAN packet, see [What it changes](#what-it-changes) — and only if its user has the write privileges; without them it stays read-only.
 
 > **Experimental.** This plugin was built from the REST API package's documentation and OpenAPI schema, and from the pfSense source code it calls, and tested against answers shaped like that schema — **not on real hardware yet**. Reports from pfSense users are welcome.
 
@@ -21,11 +21,14 @@
 | Firewall state table: current entries and limit | A state table filling up |
 | Each VLAN's network: interface, gateway, DHCP range, access read from its firewall rules (needs the *interfaces* GET privilege below) | The networks Omini can change |
 | DHCP static mappings | Fixed addresses |
+| LAGGs: each member port and its LAGG (`lagg0`) | Cables of a LAG drawn as one link |
+| DNS Resolver host overrides (and their aliases), IPv4; the system domain | Local DNS names, and the domain new names get |
+| The alias `omini_paused` | Devices whose internet is paused |
 
 ## Requirements
 
 - **pfSense CE 2.7.2 or later, or pfSense Plus 24.03 or later**, with the **REST API package v2** (`pfSense-pkg-RESTAPI`, version 2.0 or later). Each package release is built for specific pfSense versions; the latest supports CE 2.8.1 / 2.9.0 and Plus 25.11.1 and later, and older v2 releases support CE 2.7.2 and Plus 24.03 / 24.11 (see the [releases page](https://github.com/pfrest/pfSense-pkg-RESTAPI/releases)). There is no v2 build for Plus 23.09 or CE 2.7.0 / 2.7.1.
-- Omini 0.2 or later (the SDK with VLANs, services, VPN peers, DHCP pools and firewall states); changing networks needs an Omini whose SDK has networks and configuration changes (1.2 or later).
+- Omini 0.2 or later (the SDK with VLANs, services, VPN peers, DHCP pools and firewall states); changing networks needs an Omini whose SDK has networks and configuration changes (1.2 or later); local DNS names, Wake-on-LAN, pausing devices and LAGGs need an Omini that knows them (the release after 1.2).
 
 ## Install the REST API package on pfSense
 
@@ -67,6 +70,9 @@ Use a dedicated user with only the privileges Omini needs. The package creates o
    | REST API - /api/v2/status/ipsec/sas GET | `api-v2-status-ipsec-sas-get` | IPsec tunnels (optional) |
    | REST API - /api/v2/interfaces GET | `api-v2-interfaces-get` | each VLAN's network: interface, address (optional) |
    | REST API - /api/v2/firewall/rules GET | `api-v2-firewall-rules-get` | each network's access (optional) |
+   | REST API - /api/v2/interface/laggs GET | `api-v2-interface-laggs-get` | LAGG members (optional) |
+   | REST API - /api/v2/services/dns_resolver/host_overrides GET | `api-v2-services-dns-resolver-host-overrides-get` | local DNS names (optional) |
+   | REST API - /api/v2/firewall/aliases GET | `api-v2-firewall-aliases-get` | paused devices (optional) |
    | **User - Config: Deny Config Write** | `user-config-readonly` | **recommended when Omini only reads**: the REST API honours it and refuses any configuration change from this user. Leave it out to apply changes (below) |
 
    Temporarily add **REST API - /api/v2/auth/key POST** too, for the next step.
@@ -114,6 +120,9 @@ One collection = a few `GET` requests with the key in the `X-API-Key` header, ea
 | [`GET /api/v2/status/ipsec/sas`](https://pfrest.org/api-docs/#/STATUS/getStatusIPsecSAsEndpoint) | `con_id`, `state`, `remote_host`, `remote_port`, `child_sas[]`: `bytes_in`, `bytes_out`, `remote_ts` |
 | `GET /api/v2/interfaces` | `id` (lan, opt3), `if`, `descr`, `enable`, `typev4`, `ipaddr`, `subnet`, `gateway` (each VLAN's network) |
 | `GET /api/v2/firewall/rules` | `type`, `interface`, `source`, `destination`, `destination_port`, `disabled`, `floating` (each network's access) |
+| `GET /api/v2/interface/laggs` | `laggif`, `members[]`, `descr` |
+| `GET /api/v2/services/dns_resolver/host_overrides` | `id`, `host`, `domain`, `ip[]`, `aliases[]`: `host`, `domain` |
+| `GET /api/v2/firewall/aliases` | `name` (`omini_paused`), `address[]`, `detail[]` |
 
 Mapping details:
 
@@ -123,6 +132,8 @@ Mapping details:
 - **Gateway status**: `online` → up, `online` with substatus `delay`/`loss`/`highdelay`/`highloss` → degraded, `down` → down.
 - **ARP**: pfSense adds the MAC vendor after the MAC and names assigned interfaces by description (`LAN`); the plugin keeps only the MAC and turns the description into the port name. The firewall's own (permanent) entries are skipped.
 - **DHCP leases**: expired / free / backup leases are skipped; static mappings are kept.
+- **LAGGs**: pfSense lists only assigned interfaces and a LAGG member can never be assigned, so each member is added as a port with only its name and its LAGG (`lag`); a LAGG that is not assigned is added the same way (type `lag`).
+- **DNS names**: every host override's name (`host.domain`) and its aliases' names, for each IPv4 address (IPv6 ones are left out). The domain is the system domain (System → General Setup), which the DHCP server hands out unless a network sets its own.
 - **WireGuard**: a peer is *connected* when its last handshake is under 3 minutes old (WireGuard renews sessions every 2 minutes while traffic flows). The answer also carries pre-shared keys: the plugin never reads or keeps them.
 
 ## What it changes
@@ -136,6 +147,11 @@ Changes are applied only when you confirm one in Omini (Omini's guarded changes)
 | **network.delete** | Removes the network's rules, its DHCP server (`DELETE /api/v2/services/dhcp_server`, or turned off on older packages), the interface assignment (`DELETE /api/v2/interface`) and the VLAN (`DELETE /api/v2/interface/vlan`). Never the LAN, never a WAN |
 | **reservation.set** | A static mapping on the DHCP server of the network the address is in (`POST`/`PATCH /api/v2/services/dhcp_server/static_mapping`, then `…/dhcp_server/apply`); a mapping of the same MAC on another network moves |
 | **reservation.delete** | Removes the MAC's static mappings |
+| **dns.set** | A DNS Resolver host override for the name (`POST /api/v2/services/dns_resolver/host_override` with `host`, `domain`, `ip` and description *Omini*), or the address of the one with that exact name changed (`PATCH`, its description kept; a second override of the same name is removed); then `POST /api/v2/services/dns_resolver/apply`. A name that is an alias of another override is refused (change it in pfSense) |
+| **dns.delete** | Removes the host overrides with that name (`DELETE …/host_override`), then applies |
+| **wol.send** | `POST /api/v2/services/wake_on_lan/send` with the interface whose network holds the device's address (the LAN without one; never a WAN) and the MAC. Nothing is changed or saved |
+| **pause.set** | Puts the device's IPv4 addresses in the host alias `omini_paused` (`POST`/`PATCH /api/v2/firewall/alias`; each address's description is `Omini <MAC> <name>`, so the alias says which device each one is), replacing the ones the MAC had; makes sure each interface but the WANs has the block rule (below; `POST /api/v2/firewall/rule`); `POST /api/v2/firewall/apply`; then removes the device's open connections (`DELETE /api/v2/firewall/states` with `source__startswith=<ip>:` and, for NATed ones, `source__contains=(<ip>:`), best effort. pfSense's own addresses are refused |
+| **pause.delete** | Takes the MAC's addresses out of the alias; when it is left empty, removes the block rules and the alias (`DELETE /api/v2/firewall/rule`, `DELETE /api/v2/firewall/alias`); applies |
 
 **Access** is read from the interface's enabled rules; these exact sets are the presets, anything else is *custom* and is never touched:
 
@@ -144,6 +160,8 @@ Changes are applied only when you confirm one in Omini (Omini's guarded changes)
 | Internet only | pass TCP/UDP 53 to the gateway (`optN:ip`); block to the alias `omini_private` (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, created when missing); pass to any |
 | Everything | pass to any (pfSense's default LAN rules, IPv4 and IPv6, read as this) |
 | Its own network | pass TCP/UDP 53 to the gateway only |
+
+**Paused devices**: one rule per interface but the WANs, *block, IPv4, source `omini_paused`, destination not `omini_private`* (10/8, 172.16/12, 192.168/16), description *Omini: paused devices, no internet*. The API adds rules at the end of an interface's list and cannot move them, so they are **floating rules with quick** on that interface (direction in): pfSense evaluates them before every interface rule, so the device keeps reaching its own and the other private networks and loses only the internet. They are not part of a network's *access*, and changing a network's access keeps them. A network created after a device was paused gets its rule at the next pause.
 
 **Discovery between networks (mDNS)** is not supported: pfSense's repeater is the Avahi package, which the REST API does not configure. Turn it on in **Services → Avahi**; asking Omini to turn it on fails with that hint.
 
@@ -165,6 +183,15 @@ Add these to the Omini user (System → User Manager → the user → *Effective
 | REST API - /api/v2/firewall/aliases GET | `api-v2-firewall-aliases-get` |
 | REST API - /api/v2/firewall/alias POST | `api-v2-firewall-alias-post` |
 | REST API - /api/v2/firewall/apply POST | `api-v2-firewall-apply-post` |
+| *Local DNS names* | |
+| REST API - /api/v2/services/dns_resolver/host_overrides GET | `api-v2-services-dns-resolver-host-overrides-get` |
+| REST API - /api/v2/services/dns_resolver/host_override POST / PATCH / DELETE | `api-v2-services-dns-resolver-host-override-post`, `-patch`, `-delete` |
+| REST API - /api/v2/services/dns_resolver/apply POST | `api-v2-services-dns-resolver-apply-post` |
+| *Wake-on-LAN* | |
+| REST API - /api/v2/services/wake_on_lan/send POST | `api-v2-services-wake-on-lan-send-post` |
+| *Pausing devices* (with the interfaces, rules and firewall apply ones above) | |
+| REST API - /api/v2/firewall/alias PATCH / DELETE | `api-v2-firewall-alias-patch`, `-delete` |
+| REST API - /api/v2/firewall/states DELETE | `api-v2-firewall-states-delete` (optional: without it open connections last until they close) |
 
 These let the key change interfaces, DHCP and firewall rules anywhere on the firewall; Omini only ever touches what it is asked to (see the table above). Still do not give the user *WebCfg - All pages*.
 
@@ -177,6 +204,10 @@ The changes follow the package's [OpenAPI schema](https://pfrest.org/api-docs/op
 - That rules read back with the same `source`/`destination` values they were written with (`opt3`, `opt3:ip`; `opt3ip` is accepted too), and that an omitted `protocol` means any.
 - That a static interface without a DHCP server can get one with `POST /api/v2/services/dhcp_server` (older packages: `PATCH` it), and that pfSense refuses to remove an interface still used by rules or DHCP (the plugin removes those first).
 - `/api/v2/interface/apply` applies every pending interface change, including ones made by hand and not applied yet.
+- DNS: host override fields `host`/`domain`/`ip[]`/`descr`/`aliases[]` and positional ids; that `…/dns_resolver/apply` makes Unbound answer at once (the plugin reads the overrides back, not the resolver's answers).
+- Wake-on-LAN: that `interface` takes pfSense's interface name (`lan`, `opt1`) and `mac_addr` a colon-separated MAC.
+- Pausing: alias `address[]`/`detail[]` kept in step and returned as lists; `PATCH` replacing both; rule fields `floating`/`quick`/`direction: in` with an inverted alias destination (`!omini_private`); that a floating quick block on an interface is evaluated before that interface's own pass rules (pfSense's documented order); the state-kill filters `source__startswith` and `source__contains` on `DELETE /api/v2/firewall/states`, and the `ip:port` / `wan:port (ip:port)` shape of a state's `source`.
+- LAGGs: `GET /api/v2/interface/laggs` with `laggif` and `members[]` as real port names.
 
 ## Known limitations
 
@@ -188,7 +219,9 @@ The changes follow the package's [OpenAPI schema](https://pfrest.org/api-docs/op
 - **Updates**: the API has no pending-update status, so only the installed version is reported (Omini never starts an update check).
 - **DHCP lease end times** are left out: pfSense formats them in UTC or local time depending on a setting the API does not show.
 - **PPPoE / PPP WANs**: the API does not say which port carries the PPP link, so such a WAN has no link speed.
-- **Bridges and LAGGs**: their member ports are not in the API, so they are not reported.
+- **Bridges**: their member ports are not in the API, so they are not reported. LAGG members come from the LAGG's own configuration, with no status, speed or counters of their own.
+- **No configuration backups**: the REST API has no endpoint that returns `config.xml` (`/diagnostics/config_history/revisions` lists only the time, description and size of each revision), and reading it through `/diagnostics/command_prompt` would need a privilege that runs any shell command. So this plugin does not declare `backup`.
+- **Wake-on-LAN** goes out on pfSense's assigned interfaces only.
 - Lease and gateway states are compared with pfSense's English words (`expired`, `online`…); a pfSense GUI set to another language may translate some of them.
 
 ## Development

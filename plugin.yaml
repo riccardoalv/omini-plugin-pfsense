@@ -7,10 +7,12 @@ timeout_s: 60
 description: >-
   pfSense CE and Plus firewalls through the pfSense REST API package (v2):
   interfaces with link speed and traffic, WANs and gateway status, ARP, DHCP
-  leases and pool usage, VLANs, services, VPN peers, firewall states, CPU,
-  memory, swap, load, temperature and uptime. It also manages each VLAN's
-  network (VLAN, interface, gateway, DHCP range and access rules) and the DHCP
-  server's fixed addresses, when its user has the write privileges.
+  leases and pool usage, VLANs, LAGGs, services, VPN peers, firewall states,
+  local DNS names, paused devices, CPU, memory, swap, load, temperature and
+  uptime. It also manages each VLAN's network (VLAN, interface, gateway, DHCP
+  range and access rules), the DHCP server's fixed addresses, the DNS
+  Resolver's local names and paused devices, and sends Wake-on-LAN packets,
+  when its user has the write privileges.
 author: Omini
 homepage: https://github.com/riccardoalv/omini-plugin-pfsense
 changes:
@@ -18,6 +20,11 @@ changes:
   - network.delete
   - reservation.set
   - reservation.delete
+  - dns.set
+  - dns.delete
+  - wol.send
+  - pause.set
+  - pause.delete
 fields:
   - key: url
     type: url

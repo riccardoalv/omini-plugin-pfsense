@@ -263,6 +263,7 @@ def test_reads_the_networks(router, cfg):
         "192.168.1.100",
         "192.168.1.199",
     )
+    assert lan.dhcp.reserve_in_range is False  # pfSense keeps static mappings out of it
     assert (iot.interface, iot.device, iot.parent, iot.name) == ("opt1", "igc1.20", "igc1", "IOT")
     assert iot.access == "custom"  # a rule Omini does not know: left as it is
     assert lan.mdns is None  # Avahi is not in the API
@@ -481,6 +482,14 @@ def test_fixes_and_frees_an_address(router, cfg):
     devices = collect_module.apply(cfg, change("reservation.delete", {"mac": "aa:bb:cc:00:00:01"}))
     assert not router.dhcp["opt1"]["staticmap"]
     assert [r.mac for r in devices[0].dhcp_reservations] == ["aa:bb:cc:dd:ee:12"]
+
+
+def test_a_reservation_stays_out_of_the_dhcp_range(router, cfg):
+    with pytest.raises(PluginError, match="outside it"):
+        collect_module.apply(
+            cfg, change("reservation.set", {"mac": "aa:bb:cc:00:00:01", "ip": "192.168.1.150"})
+        )
+    assert router.writes == []
 
 
 def test_a_reservation_needs_dhcp_in_its_network(router, cfg):
