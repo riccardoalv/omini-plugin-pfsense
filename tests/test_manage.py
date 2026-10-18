@@ -345,6 +345,13 @@ def test_pauses_a_device(box, cfg):
     assert nets[1].access == "all"  # the block is no access preset
 
 
+def test_no_block_on_dhcp_client_or_vpn_interfaces(box, cfg):
+    box.interfaces["opt5"] = {"if": "igc4", "descr": "LTE", "enable": True, "typev4": "dhcp"}
+    box.interfaces["opt6"] = {"if": "ovpns1", "descr": "VPN", "enable": True, "typev4": "none"}
+    collect_module.apply(cfg, pause())
+    assert sorted(r["interface"][0] for r in box.pause_rules()) == ["lan", "opt1", "opt2"]
+
+
 def test_pausing_again_replaces_the_addresses(box, cfg):
     collect_module.apply(cfg, pause(mac="aa:bb:cc:00:00:60", ips=["192.168.1.60"], name="TV"))
     collect_module.apply(cfg, pause())

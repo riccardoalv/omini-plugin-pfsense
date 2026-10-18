@@ -313,8 +313,14 @@ is_pause_rule = nets.is_pause_rule
 
 
 def lan_side(st: nets.State) -> list[str]:
-    """The interfaces a paused device may be behind: every enabled one but the WANs."""
-    return [a.ifname for a in st.assigned if a.enabled and not a.wan and a.device not in st.wan]
+    """The interfaces a paused device may be behind: the enabled ones with a
+    private network of the firewall's own (a static private address), not
+    WANs. A DHCP client or VPN interface gets no block rule."""
+    return [
+        a.ifname
+        for a in st.assigned
+        if a.enabled and not a.wan and a.device not in st.wan and nets.private(a.gateway)
+    ]
 
 
 def lan_ipv6(c: Client, st: nets.State) -> list[str]:
