@@ -848,73 +848,82 @@ def apply(cfg: Config, change: Any) -> list[Device]:
         ifaces, by_name = optional("interfaces", [], lambda: interfaces(c, vlan_rows), ([], {}))
         wan = wan_devices(ifaces)
         if change.kind in ("dns.set", "dns.delete", "wol.send", "pause.set", "pause.delete"):
-            apply_other(c, change.kind, value, by_name, wan)
-            return collect(cfg)
-
-        def state() -> nets.State:
-            return nets.read_state(c, wan) or nets.State()
-
-        st = nets.read_state(c, wan)
-        if st is None:
-            raise PluginError(
-                "changing networks needs the REST API package v2 and these privileges: "
-                + "; ".join(nets.WRITE_PRIVILEGES)
-            )
-        if change.kind == "reservation.set":
-            mac = nets.norm_mac(value.get("mac"))
-            nets.reserve(c, st, value)
-            nets.wait_for(
-                lambda: any(
-                    r["mac"] == mac and r["ip"] == value["ip"] for r in nets.reservations(state())
-                ),
-                "the reservation",
-            )
-        elif change.kind == "reservation.delete":
-            mac = nets.norm_mac(value.get("mac"))
-            nets.unreserve(c, st, mac)
-            nets.wait_for(
-                lambda: not any(r["mac"] == mac for r in nets.reservations(state())),
-                "the removal of the reservation",
-            )
-        elif change.kind == "network.set":
-            nets.check_mdns(value)
-            vid = int(value["vlan"])
-            new = nets.find(st, vid) is None
-            had_vlan = any(v["tag"] == vid for v in st.vlans.values())
-            try:
-                nets.apply_set(c, st, value)
-                nets.wait_for(lambda: nets.matches(nets.read_state(c, wan), value), "the network")
-            except PluginError:
-                if new and vid != 1:
-                    undo(c, wan, vid, had_vlan)
-                raise
+            reads(apply_other, c, change.kind, value, by_name, wan)
         else:
-            vid = int(value["vlan"])
-            nets.apply_delete(c, st, vid)
-            nets.wait_for(lambda: nets.find(state(), vid) is None, "the removal")
+            reads(apply_network, c, change.kind, value, wan)
     finally:
         c.close()
     return collect(cfg)
 
 
-def apply_other(
-    c: Client, kind: str, value: dict[str, Any], by_name: dict[str, dict[str, Any]], wan: set[str]
-) -> None:
+def reads(fn: Callable[..., None], *args: Any) -> None:
+    """A change: a read it needs that the API user may not make, or an
+    endpoint the package does not have, names itself."""
     try:
-        if kind == "dns.set":
-            manage.dns_set(c, value)
-        elif kind == "dns.delete":
-            manage.dns_delete(c, value)
-        elif kind == "wol.send":
-            manage.wake(c, by_name, wan, value)
-        elif kind == "pause.set":
-            manage.pause_set(c, wan, value)
-        else:
-            manage.pause_delete(c, wan, value)
-    except Forbidden as e:  # a read the change needs
+        fn(*args)
+    except Forbidden as e:
         raise PluginError(f"give the API user the privilege {e.privilege}") from e
     except NotFound as e:
         raise PluginError(f"this REST API package has no {e} endpoint: update the package") from e
+
+
+def apply_network(c: Client, kind: str, value: dict[str, Any], wan: set[str]) -> None:
+    def state() -> nets.State:
+        return nets.read_state(c, wan) or nets.State()
+
+    st = nets.read_state(c, wan)
+    if st is None:
+        raise PluginError(
+            "changing networks needs the REST API package v2 and these privileges: "
+            + "; ".join(nets.WRITE_PRIVILEGES)
+        )
+    if kind == "reservation.set":
+        mac = nets.norm_mac(value.get("mac"))
+        nets.reserve(c, st, value)
+        nets.wait_for(
+            lambda: any(
+                r["mac"] == mac and r["ip"] == value["ip"] for r in nets.reservations(state())
+            ),
+            "the reservation",
+        )
+    elif kind == "reservation.delete":
+        mac = nets.norm_mac(value.get("mac"))
+        nets.unreserve(c, st, mac)
+        nets.wait_for(
+            lambda: not any(r["mac"] == mac for r in nets.reservations(state())),
+            "the removal of the reservation",
+        )
+    elif kind == "network.set":
+        nets.check_mdns(value)
+        vid = int(value["vlan"])
+        new = nets.find(st, vid) is None
+        had_vlan = any(v["tag"] == vid for v in st.vlans.values())
+        try:
+            nets.apply_set(c, st, value)
+            nets.wait_for(lambda: nets.matches(nets.read_state(c, wan), value), "the network")
+        except (PluginError, Forbidden, NotFound):
+            if new and vid != 1:
+                undo(c, wan, vid, had_vlan)
+            raise
+    else:
+        vid = int(value["vlan"])
+        nets.apply_delete(c, st, vid)
+        nets.wait_for(lambda: nets.find(state(), vid) is None, "the removal")
+
+
+def apply_other(
+    c: Client, kind: str, value: dict[str, Any], by_name: dict[str, dict[str, Any]], wan: set[str]
+) -> None:
+    if kind == "dns.set":
+        manage.dns_set(c, value)
+    elif kind == "dns.delete":
+        manage.dns_delete(c, value)
+    elif kind == "wol.send":
+        manage.wake(c, by_name, wan, value)
+    elif kind == "pause.set":
+        manage.pause_set(c, wan, value)
+    else:
+        manage.pause_delete(c, wan, value)
 
 
 def undo(c: Client, wan: set[str], vid: int, keep_vlan: bool) -> None:

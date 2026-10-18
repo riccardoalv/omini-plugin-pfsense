@@ -498,3 +498,13 @@ def test_a_reservation_needs_dhcp_in_its_network(router, cfg):
             cfg, change("reservation.set", {"mac": "aa:bb:cc:00:00:01", "ip": "172.16.0.50"})
         )
     assert router.writes == []
+
+
+def test_a_read_the_change_needs_names_its_privilege(router, cfg):
+    router.forbidden.add(("GET", "/api/v2/firewall/aliases"))
+    with pytest.raises(PluginError, match=r"REST API - /api/v2/firewall/aliases GET"):
+        collect_module.apply(cfg, change("network.set", cameras()))
+    assert "opt3" not in router.interfaces  # what it created is removed again
+    router.forbidden = {("GET", "/api/v2/interface/vlans")}
+    with pytest.raises(PluginError, match=r"REST API - /api/v2/interface/vlans GET"):
+        collect_module.apply(cfg, change("network.set", cameras(access="all")))
