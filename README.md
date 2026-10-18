@@ -216,7 +216,7 @@ The changes follow the package's [OpenAPI schema](https://pfrest.org/api-docs/op
 ## Known limitations
 
 - **Only assigned interfaces** are listed (the API reports pfSense's assigned interfaces, not every NIC): an unassigned port is not on the map.
-- **Traffic counters** are pfSense's *passed* bytes per interface (pf's 64-bit counters, the same numbers as Status → Interfaces), averaged between two collections.
+- **Traffic counters** are each interface's bytes in and out (`inbytes`/`outbytes` of `/api/v2/status/interfaces`: all its traffic, not only what the firewall passed), averaged between two collections.
 - **CPU usage** is the package's estimate from the 1-minute load average ÷ cores, not a sampled value.
 - **Temperature**: a single value, pfSense's system temperature (first CPU core, else the ACPI thermal zone).
 - **Disks**: the API reports only the use of `/` as a percentage, with no sizes, so disks are not reported.
