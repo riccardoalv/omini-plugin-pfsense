@@ -23,6 +23,7 @@ def test_reads_the_firewall(pfsense, cfg):
     assert fw.host == "192.168.1.1" and fw.serial == "2213220123"
     assert fw.uptime_s == ((3 * 24 + 4) * 60 + 12) * 60 + 9
     assert (fw.cpu_pct, fw.mem_pct, fw.swap_pct) == (5.2, 23, 0)
+    assert fw.cpu_count == 4
     assert fw.load_avg == [0.21, 0.18, 0.15]
     assert [(t.sensor, t.kind, t.celsius) for t in fw.temperatures] == [("CPU", "cpu", 48.5)]
     assert fw.storage is None  # only a percentage is reported, no sizes
@@ -54,6 +55,7 @@ def test_ports_with_speed_connector_and_traffic(pfsense, cfg):
     assert (dmz.speed_mbps, dmz.connector) == (10000, "sfp")
     down = ports["ix1"]
     assert (down.up, down.speed_mbps, down.connector, down.wan) == (False, None, None, None)
+    assert wan.enabled is True
     wg = ports["tun_wg0"]
     assert (wg.type, wg.mac, wg.speed_mbps) == ("tunnel", None, None)
 
@@ -280,3 +282,12 @@ def test_speed_and_version():
         "pfSense Plus 24.11"
     )
     assert os_version({}) is None
+
+
+def test_a_disabled_interface(pfsense, cfg):
+    rows = pfsense.routes["/api/v2/status/interfaces"]["data"]
+    rows[-1]["enable"] = False
+    del rows[0]["enable"]
+    [fw] = collect(cfg)
+    assert [i.enabled for i in fw.interfaces][:1] == [None]
+    assert fw.interfaces[len(rows) - 1].enabled is False
