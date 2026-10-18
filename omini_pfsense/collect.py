@@ -697,7 +697,8 @@ def wan_devices(ifaces: list[Interface]) -> set[str]:
 def add_laggs(ifaces: list[Interface], lagg_rows: list[dict[str, Any]]) -> list[Interface]:
     """Each LAGG member port gets its LAGG's name. pfSense lists only assigned
     interfaces, and a member can never be assigned: members (and an
-    unassigned LAGG) are added with what the LAGG says of them."""
+    unassigned LAGG) are added with what the LAGG says of them, and the LAGG
+    gets its members."""
     if "lag" not in Interface.model_fields:
         return ifaces
     out = list(ifaces)
@@ -709,6 +710,7 @@ def add_laggs(ifaces: list[Interface], lagg_rows: list[dict[str, Any]]) -> list[
         if lagg not in by_name:
             by_name[lagg] = Interface(name=lagg, type="lag", description=text(r.get("descr")))
             out.append(by_name[lagg])
+        members = []
         for m in r.get("members") or []:
             m = text(m)
             if not m or m == lagg:
@@ -717,6 +719,8 @@ def add_laggs(ifaces: list[Interface], lagg_rows: list[dict[str, Any]]) -> list[
                 by_name[m] = Interface(name=m, type=interface_type(m))
                 out.append(by_name[m])
             by_name[m].lag = lagg
+            members.append(m)
+        by_name[lagg].members = members or None
     return out
 
 

@@ -142,6 +142,7 @@ def test_reads_names_domain_and_laggs(box, cfg):
     ifaces = {i.name: i for i in fw.interfaces}
     assert ifaces["lagg0"].type == "lag" and ifaces["lagg0"].description == "to the core switch"
     assert (ifaces["igc2"].lag, ifaces["igc3"].lag) == ("lagg0", "lagg0")
+    assert ifaces["lagg0"].members == ["igc2", "igc3"]
     assert ifaces["igc2"].type == "ethernet" and ifaces["igc2"].up is None  # nothing invented
     assert ifaces["igc1"].lag is None
     assert box.writes == []
@@ -153,6 +154,7 @@ def test_an_assigned_lagg_keeps_its_data(box, pfsense, cfg):
     [fw] = collect_module.collect(cfg)
     lagg = [i for i in fw.interfaces if i.name == "lagg0"]
     assert len(lagg) == 1 and lagg[0].description == "CORE" and lagg[0].type == "lag"
+    assert lagg[0].members == ["igc2", "igc3"]
 
 
 def test_without_the_new_privileges_the_round_goes_on(box, cfg):
