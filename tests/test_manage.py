@@ -592,3 +592,10 @@ def test_removing_a_network_removes_its_block(box, cfg):
     collect_module.apply(cfg, change("network.delete", {"vlan": 20}))
     assert "opt1" not in box.interfaces
     assert {r["interface"][0] for r in box.pause_rules()} == {"lan", "opt2"}
+
+
+def test_waking_without_the_interfaces_privilege_names_it(box, pfsense, cfg):
+    pfsense.forbidden.add("/api/v2/status/interfaces")
+    with pytest.raises(PluginError, match=r"REST API - /api/v2/status/interfaces GET"):
+        collect_module.apply(cfg, change("wol.send", {"mac": "aa:bb:cc:00:00:07"}))
+    assert box.woken == []

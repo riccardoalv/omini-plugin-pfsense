@@ -848,8 +848,14 @@ def apply(cfg: Config, change: Any) -> list[Device]:
     c = client_from(cfg)
     try:
         system_status(c)
-        vlan_rows = optional("vlans", [], lambda: rows(c, "vlans"), [])
-        ifaces, by_name = optional("interfaces", [], lambda: interfaces(c, vlan_rows), ([], {}))
+        missing: list[str] = []
+        vlan_rows = optional("vlans", missing, lambda: rows(c, "vlans"), [])
+        ifaces, by_name = optional(
+            "interfaces", missing, lambda: interfaces(c, vlan_rows), ([], {})
+        )
+        if change.kind == "wol.send" and privilege("interfaces") in missing:
+            # Without them there is no network to send the magic packet on.
+            raise PluginError(f"give the API user the privilege {privilege('interfaces')}")
         wan = wan_devices(ifaces)
         if change.kind in ("dns.set", "dns.delete", "wol.send", "pause.set", "pause.delete"):
             reads(apply_other, c, change.kind, value, by_name, wan)
