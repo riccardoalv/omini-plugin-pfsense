@@ -291,3 +291,63 @@ def test_a_disabled_interface(pfsense, cfg):
     [fw] = collect(cfg)
     assert [i.enabled for i in fw.interfaces][:1] == [None]
     assert fw.interfaces[len(rows) - 1].enabled is False
+
+
+def test_port_forwards(pfsense, cfg):
+    [fw] = collect(cfg)
+    got = [f.model_dump(exclude_none=True) for f in fw.port_forwards]
+    assert got == [
+        {
+            "protocol": "tcp",
+            "external_port": 443,
+            "internal_ip": "192.168.1.20",
+            "internal_port": 8443,
+            "interface": "igc0",
+            "description": "NAS web",
+            "enabled": True,
+            "upnp": False,
+        },
+        {
+            "protocol": "udp",
+            "external_port": 27015,
+            "external_port_end": 27020,
+            "internal_ip": "192.168.1.30",
+            "internal_port": 27015,
+            "source": "198.51.100.0/24",
+            "interface": "igc0",
+            "description": "Game server",
+            "enabled": False,
+            "upnp": False,
+        },
+        # "no redirect", ICMP and an alias port are left out: nothing invented
+    ]
+
+
+def test_port_forwards_are_optional(pfsense, cfg, caplog):
+    pfsense.forbidden = {"/api/v2/firewall/nat/port_forwards"}
+    [fw] = collect(cfg)
+    assert fw.port_forwards is None and fw.interfaces
+    assert "REST API - /api/v2/firewall/nat/port_forwards GET" in caplog.text
+    pfsense.forbidden = set()
+    del pfsense.routes["/api/v2/firewall/nat/port_forwards"]  # an older package: 404
+    [fw] = collect(cfg)
+    assert fw.port_forwards is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("443", (443, None)),
+        ("27015:27020", (27015, 27020)),
+        ("8000-8010", (8000, 8010)),
+        ("80:80", (80, None)),
+        ("web_ports", (None, None)),
+        (None, (None, None)),
+        ("0", (None, None)),
+        ("90:80", (None, None)),
+    ],
+)
+def test_port_range(value, expected):
+    from omini_pfsense.collect import port_range
+
+    assert port_range(value) == expected

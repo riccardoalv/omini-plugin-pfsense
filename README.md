@@ -24,6 +24,8 @@
 | LAGGs: each member port and its LAGG (`lagg0`) | Cables of a LAG drawn as one link |
 | DNS Resolver host overrides (and their aliases), IPv4; the system domain | Local DNS names, and the domain new names get |
 | The alias `omini_paused` | Devices whose internet is paused (their IPv4 addresses) |
+| NAT port forwards (Firewall → NAT → Port Forward): protocol, external port or range, target address and port, source, interface, description, on or off | The **Exposed to the internet** section (Omini never changes them) |
+| NAT port forwards (Firewall → NAT → Port Forward): protocol, external port or range, target address and port, source, interface, description, on or off | The **Exposed to the internet** section (Omini never changes them) |
 
 ## Requirements
 
@@ -73,6 +75,7 @@ Use a dedicated user with only the privileges Omini needs. The package creates o
    | REST API - /api/v2/interface/laggs GET | `api-v2-interface-laggs-get` | LAGG members (optional) |
    | REST API - /api/v2/services/dns_resolver/host_overrides GET | `api-v2-services-dns-resolver-host-overrides-get` | local DNS names (optional) |
    | REST API - /api/v2/firewall/aliases GET | `api-v2-firewall-aliases-get` | paused devices (optional) |
+   | REST API - /api/v2/firewall/nat/port_forwards GET | `api-v2-firewall-nat-port-forwards-get` | port forwards (optional) |
    | **User - Config: Deny Config Write** | `user-config-readonly` | **recommended when Omini only reads**: the REST API honours it and refuses any configuration change from this user. Leave it out to apply changes (below) |
 
    Temporarily add **REST API - /api/v2/auth/key POST** too, for the next step.
@@ -201,7 +204,7 @@ These let the key change interfaces, DHCP and firewall rules anywhere on the fir
 
 ### Not verified on hardware
 
-The changes follow the package's [OpenAPI schema](https://pfrest.org/api-docs/openapi.json) and were tested against a fake that answers like it, **not against a real pfSense**. Assumed from the schema and not yet seen on a device:
+The changes, and the reads added since 0.2 (port forwards), follow the package's [OpenAPI schema](https://pfrest.org/api-docs/openapi.json) and were tested against a fake that answers like it, **not against a real pfSense**. Assumed from the schema and not yet seen on a device:
 
 - Ids: an interface's id is its pfSense name (`opt3`) and the `POST /api/v2/interface` answer carries it; a DHCP server's id is its interface's name; VLAN, rule and static-mapping ids are positions in their lists and move down when an earlier one is removed (the plugin removes from the last).
 - Fields: VLAN `if`/`tag`/`descr`/`vlanif`; interface `if`/`descr`/`enable`/`typev4: static`/`ipaddr`/`subnet`; DHCP server `interface`/`enable`/`range_from`/`range_to`/`dnsserver`/`staticmap[]`; static mapping `parent_id`/`id`/`mac`/`ipaddr`/`hostname`/`descr`; rule `type`/`interface[]`/`ipprotocol`/`protocol`/`source`/`destination` (`optN:ip` for the interface address)/`destination_port`/`descr`/`disabled`/`floating`; alias `name`/`type`/`address[]`/`detail[]`.
@@ -212,6 +215,7 @@ The changes follow the package's [OpenAPI schema](https://pfrest.org/api-docs/op
 - Wake-on-LAN: that `interface` takes pfSense's interface name (`lan`, `opt1`) and `mac_addr` a colon-separated MAC.
 - Pausing: alias `address[]`/`detail[]` kept in step and returned as lists; `PATCH` replacing both; rule fields `floating`/`quick`/`direction: in`/`ipprotocol: inet46` with an inverted alias destination (`!omini_local`); that a host alias takes IPv6 addresses and a network alias IPv6 networks next to IPv4 ones; the `output` of `POST /api/v2/diagnostics/command_prompt` and the column layout of FreeBSD's `ndp -an` (address, MAC); `ipaddrv6`/`subnetv6` of `/api/v2/status/interfaces` for a tracked (DHCPv6-PD) LAN; that a floating quick block on an interface is evaluated before that interface's own pass rules (pfSense's documented order); the state-kill filters `source__startswith` and `source__contains` on `DELETE /api/v2/firewall/states`, and the `ip:port` / `wan:port (ip:port)` shape of a state's `source`.
 - LAGGs: `GET /api/v2/interface/laggs` with `laggif` and `members[]` as real port names.
+- Port forwards: `GET /api/v2/firewall/nat/port_forwards` with `interface` (pfSense's name, `wan`), `protocol`, `source`, `destination_port` (`443`, or a range `27015:27020`), `target`, `local_port`, `disabled`, `nordr` and `descr`.
 
 ## Known limitations
 
@@ -226,6 +230,7 @@ The changes follow the package's [OpenAPI schema](https://pfrest.org/api-docs/op
 - **Bridges**: their member ports are not in the API, so they are not reported. LAGG members come from the LAGG's own configuration, with no status, speed or counters of their own.
 - **No configuration backups**: the REST API has no endpoint that returns `config.xml` (`/diagnostics/config_history/revisions` lists only the time, description and size of each revision), and reading it through `/diagnostics/command_prompt` would need a privilege that runs any shell command. So this plugin does not declare `backup`.
 - **Wake-on-LAN** goes out on pfSense's assigned interfaces only.
+- **Port forwards**: a forward whose external port is an alias, or for a protocol without ports (ICMP, ESP…), is left out; a target that is an alias has no internal address. UPnP / NAT-PMP mappings (miniupnpd) are not reported: the REST API has no endpoint for them.
 - Lease and gateway states are compared with pfSense's English words (`expired`, `online`…); a pfSense GUI set to another language may translate some of them.
 
 ## Development

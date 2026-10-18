@@ -27,6 +27,7 @@ from omini_sdk import (
     VpnPeer,
     log,
 )
+from omini_sdk.models import PortForward
 
 from omini_pfsense import manage
 from omini_pfsense import networks as nets
@@ -58,6 +59,7 @@ ENDPOINTS = {
     "dns": manage.HOST_OVERRIDES,
     "aliases": nets.ALIASES,
     "laggs": manage.LAGGS,
+    "port_forwards": "/api/v2/firewall/nat/port_forwards",
 }
 
 
@@ -755,6 +757,74 @@ def router_networks(c: Client, ifaces: list[Interface], missing: list[str]) -> d
     }
 
 
+PORT_RANGE = re.compile(r"^(\d{1,5})(?:\s*[:-]\s*(\d{1,5}))?$")
+
+
+def port_range(value: Any) -> tuple[int | None, int | None]:
+    """'443' → (443, None); '27015:27020' or '27015-27020' → (27015, 27020).
+    An alias name, or nothing, gives (None, None): the port is unknown."""
+    m = PORT_RANGE.match(text(str(value)) or "") if value not in (None, "") else None
+    if not m:
+        return None, None
+    lo, hi = int(m.group(1)), int(m.group(2)) if m.group(2) else None
+    if not 1 <= lo <= 65535 or (hi is not None and not lo <= hi <= 65535):
+        return None, None
+    return lo, hi if hi != lo else None
+
+
+def ip_or_none(value: Any) -> str | None:
+    try:
+        return str(ipaddress.ip_address(text(value) or ""))
+    except ValueError:
+        return None
+
+
+def port_forwards(c: Client, by_name: dict[str, dict[str, Any]]) -> list[PortForward]:
+    """NAT port forwards (Firewall → NAT → Port Forward). A "no redirect" rule
+    forwards nothing; one whose external port is an alias, or for a protocol
+    without ports (ICMP, ESP...), is left out: its port is unknown. A target
+    that is an alias leaves the internal address empty."""
+    out = []
+    for r in rows(c, "port_forwards"):
+        protocol = str(r.get("protocol") or "").lower()
+        if protocol not in ("tcp", "udp", "tcp/udp") or r.get("nordr") is True:
+            continue
+        ext, ext_end = port_range(r.get("destination_port"))
+        if ext is None:
+            log.info("port forward %r: unknown external port", r.get("descr"))
+            continue
+        local, _ = port_range(r.get("local_port"))
+        source = text(r.get("source"))
+        iface = r.get("interface")
+        if isinstance(iface, list):
+            iface = next((i for i in iface if text(i)), None)
+        iface = text(iface)
+        row = by_name.get(iface or "") or {}
+        out.append(
+            PortForward(
+                protocol=protocol,
+                external_port=ext,
+                external_port_end=ext_end,
+                internal_ip=ip_or_none(r.get("target")),
+                internal_port=local,
+                source=None if not source or source.lower() == "any" else source,
+                interface=text(row.get("hwif")) or iface,
+                description=text(r.get("descr")),
+                enabled=not r["disabled"] if isinstance(r.get("disabled"), bool) else None,
+                upnp=False,
+            )
+        )
+    return out
+
+
+def exposure(c: Client, by_name: dict[str, dict[str, Any]], missing: list[str]) -> dict[str, Any]:
+    """Port forwards (left out with an Omini whose SDK does not know them yet)."""
+    if "port_forwards" not in Device.model_fields:
+        return {}
+    found = optional("port_forwards", missing, lambda: port_forwards(c, by_name), [])
+    return {"port_forwards": found or None}
+
+
 # --- plugin entry points -------------------------------------------------------
 
 
@@ -814,6 +884,7 @@ def collect(cfg: Config) -> list[Device]:
             firewall_states=optional("states", missing, lambda: firewall_states(c), None),
             **router_networks(c, ifaces, missing),
             **router_names(c, names, ifaces, missing),
+            **exposure(c, by_name, missing),
         )
         if missing:
             log.warning("missing privileges: %s", ", ".join(sorted(set(missing))))
