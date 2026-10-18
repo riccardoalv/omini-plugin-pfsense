@@ -1,6 +1,6 @@
 # omini-plugin-pfsense
 
-[Omini](https://github.com/riccardoalv/omini) plugin for **pfSense** (CE and Plus), through the [pfSense REST API package](https://pfrest.org/) (v2). Each collection only reads (`GET`). It changes the firewall only when you apply a change from Omini — a VLAN's network, a fixed DHCP address, a local DNS name, a paused device or a Wake-on-LAN packet, see [What it changes](#what-it-changes) — and only if its user has the write privileges; without them it stays read-only.
+[Omini](https://github.com/riccardoalv/omini) plugin for **pfSense** (CE and Plus), through the [pfSense REST API package](https://pfrest.org/) (v2). Each collection only reads (`GET`). It changes the firewall only when you apply a change from Omini — an interface on or off, a VLAN's network, a fixed DHCP address, a local DNS name, a paused device or a Wake-on-LAN packet, see [What it changes](#what-it-changes) — and only if its user has the write privileges; without them it stays read-only.
 
 > **Experimental.** This plugin was built from the REST API package's documentation and OpenAPI schema, and from the pfSense source code it calls, and tested against answers shaped like that schema — **not on real hardware yet**. Reports from pfSense users are welcome.
 
@@ -145,6 +145,7 @@ Changes are applied only when you confirm one in Omini (Omini's guarded changes)
 
 | Change | What the plugin does on pfSense |
 |---|---|
+| **port.enabled** | Turns the assigned interface on the port (`igc1`, `igc1.20`) on or off: `PATCH /api/v2/interface` with its pfSense name (`opt2`) and `enable`, then `POST /api/v2/interface/apply`; reads `/api/v2/interfaces` back until it says so, and puts it back as it was when it does not. Never turns off the interface whose address (configured, or current on DHCP) is the one Omini reaches pfSense at; Omini's own guard also refuses cutting itself or the internet off. Unassigned ports (LAGG members) cannot be changed |
 | **network.set** (create) | Adds the VLAN on the port toward the switches (`POST /api/v2/interface/vlan`, on the LAN's port when none is named; never on a bridge or another VLAN), assigns it with the gateway as a static IPv4 address (`POST /api/v2/interface`, then `POST /api/v2/interface/apply`), turns on its DHCP server with the range and the gateway as DNS server (`POST` — or, on older packages, `PATCH` — `/api/v2/services/dhcp_server`, then `…/dhcp_server/apply`) and writes the access rules (below; `POST /api/v2/firewall/rule`, then `POST /api/v2/firewall/apply`) |
 | **network.set** (change) | Changes the same things in place with `PATCH` (interface description and address, DHCP range or DHCP off); the rules are replaced only when the access changes to another preset. The LAN is VLAN 1 and is never moved; the address Omini reaches pfSense at is never changed |
 | **network.delete** | Removes the network's rules, its DHCP server (`DELETE /api/v2/services/dhcp_server`, or turned off on older packages), the interface assignment (`DELETE /api/v2/interface`) and the VLAN (`DELETE /api/v2/interface/vlan`). Never the LAN, never a WAN |
@@ -200,6 +201,8 @@ Add these to the Omini user (System → User Manager → the user → *Effective
 | REST API - /api/v2/status/interfaces GET | `api-v2-status-interfaces-get` (the LAN-side IPv6 networks a paused device still reaches; already in the read privileges) |
 | REST API - /api/v2/diagnostics/command_prompt POST | `api-v2-diagnostics-command-prompt-post` (optional, **runs any shell command**: only to pause over IPv6, see *IPv6 of a paused device*) |
 
+Turning an interface on or off (`port.enabled`) needs only the first three: *interfaces GET*, *interface PATCH* and *interface/apply POST*.
+
 These let the key change interfaces, DHCP and firewall rules anywhere on the firewall; Omini only ever touches what it is asked to (see the table above). Still do not give the user *WebCfg - All pages*.
 
 ### Not verified on hardware
@@ -215,6 +218,7 @@ The changes, and the reads added since 0.2 (port forwards, IPv6), follow the pac
 - IPv6: that a host override's `ip[]` holds IPv6 addresses next to IPv4 ones and a `PATCH` keeps the order given; that `/api/v2/status/gateways` lists the IPv6 (DHCP6) gateways with their `srcip`; whether `/api/v2/status/dhcp_server/leases` ever reports DHCPv6 leases (with a MAC) — they are kept when it does.
 - Wake-on-LAN: that `interface` takes pfSense's interface name (`lan`, `opt1`) and `mac_addr` a colon-separated MAC.
 - Pausing: alias `address[]`/`detail[]` kept in step and returned as lists; `PATCH` replacing both; rule fields `floating`/`quick`/`direction: in`/`ipprotocol: inet46` with an inverted alias destination (`!omini_local`); that a host alias takes IPv6 addresses and a network alias IPv6 networks next to IPv4 ones; the `output` of `POST /api/v2/diagnostics/command_prompt` and the column layout of FreeBSD's `ndp -an` (address, MAC); `ipaddrv6`/`subnetv6` of `/api/v2/status/interfaces` for a tracked (DHCPv6-PD) LAN; that a floating quick block on an interface is evaluated before that interface's own pass rules (pfSense's documented order); the state-kill filters `source__startswith` and `source__contains` on `DELETE /api/v2/firewall/states`, and the `ip:port` / `wan:port (ip:port)` shape of a state's `source`.
+- Turning an interface on or off: that `PATCH /api/v2/interface` takes `enable` alone (without the rest of the interface) and that `/api/v2/interfaces` then reads `enable: false`; that `/api/v2/interface/apply` brings it down or up.
 - LAGGs: `GET /api/v2/interface/laggs` with `laggif` and `members[]` as real port names.
 - Port forwards: `GET /api/v2/firewall/nat/port_forwards` with `interface` (pfSense's name, `wan`), `protocol`, `source`, `destination_port` (`443`, or a range `27015:27020`), `target`, `local_port`, `disabled`, `nordr` and `descr`.
 

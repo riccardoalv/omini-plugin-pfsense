@@ -587,3 +587,74 @@ def pause_delete(c: Client, wan: set[str], value: dict[str, Any]) -> None:
 
 def laggs(c: Client) -> list[dict[str, Any]]:
     return nets.rows(c, LAGGS)
+
+
+# --- an interface on or off (port.enabled) ----------------------------------------
+
+PORT_PRIVILEGES = privileges(
+    (nets.INTERFACES, "GET"),
+    (nets.INTERFACE, "PATCH"),
+    (nets.INTERFACE_APPLY, "POST"),
+)
+
+
+def assigned(c: Client, port: str) -> dict[str, Any] | None:
+    """The configuration of the assigned interface on the port (igc1, igc1.20)."""
+    return next((r for r in nets.rows(c, nets.INTERFACES) if text(r.get("if")) == port), None)
+
+
+def addresses_of(*rows: dict[str, Any]) -> set[str]:
+    """The addresses an interface has, configured or current (one on DHCP has
+    its configuration say "dhcp" and its status the address)."""
+    out = set()
+    for r in rows:
+        for key in ("ipaddr", "ipaddrv6"):
+            a = nets.text(r.get(key)).split("%")[0].split("/")[0]
+            with contextlib.suppress(ValueError):
+                out.add(str(ipaddress.ip_address(a)))
+    return out
+
+
+def port_enabled(c: Client, port: str, enable: bool, status: dict[str, Any] | None) -> None:
+    """Turns an assigned interface on or off (PATCH /interface enable, then
+    /interface/apply) and reads it back; puts it back as it was when it does
+    not read back. Refuses to turn off the interface whose address Omini
+    reaches pfSense at."""
+    if not port:
+        raise PluginError("port.enabled needs the interface")
+    row = assigned(c, port)
+    if row is None:
+        raise PluginError(
+            f"{port} is not an assigned interface of pfSense: only those can be turned on or off"
+        )
+    ifname = text(row.get("id"))
+    host = nets.management_ip(c)
+    if not enable and status is None and not addresses_of(row):
+        raise PluginError(
+            f"cannot tell whether {port} has the address Omini reaches pfSense at: "
+            "give the API user the privilege REST API - /api/v2/status/interfaces GET"
+        )
+    if not enable and host in addresses_of(row, status or {}):
+        raise PluginError(
+            f"{port} has {host}, the address Omini reaches pfSense at: "
+            "turning it off would cut Omini off the firewall"
+        )
+    before = row.get("enable") is True
+    if before == enable:
+        return
+    nets.write(c.patch, nets.INTERFACE, {"id": ifname, "enable": enable})
+    nets.write(c.post, nets.INTERFACE_APPLY)
+
+    def reads_back() -> bool:
+        r = assigned(c, port)
+        return r is not None and (r.get("enable") is True) == enable
+
+    try:
+        nets.wait_for(reads_back, f"turning {port} {'on' if enable else 'off'}")
+    except PluginError:
+        try:
+            nets.write(c.patch, nets.INTERFACE, {"id": ifname, "enable": before})
+            nets.write(c.post, nets.INTERFACE_APPLY)
+        except Exception:
+            log.exception("could not put %s back as it was", port)
+        raise

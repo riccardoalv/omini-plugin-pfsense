@@ -902,6 +902,7 @@ def collect(cfg: Config) -> list[Device]:
 
 
 CHANGES = (
+    "port.enabled",
     "network.set",
     "network.delete",
     "reservation.set",
@@ -922,9 +923,12 @@ def apply(cfg: Config, change: Any) -> list[Device]:
     packet; pause.set and pause.delete a device's addresses in the alias of
     paused devices (with its block rules). pfSense saves what the API changes;
     the plugin then reads the router again until it serves what was asked (and
-    removes a network it created that does not come out as asked)."""
+    removes a network it created that does not come out as asked); port.enabled
+    turns an assigned interface on or off."""
     if change.kind not in CHANGES:
         raise PluginError(f"this plugin cannot apply {change.kind}")
+    if change.kind == "port.enabled":
+        return apply_port(cfg, change)
     value = change.value if isinstance(change.value, dict) else dict(change.value)
     c = client_from(cfg)
     try:
@@ -942,6 +946,23 @@ def apply(cfg: Config, change: Any) -> list[Device]:
             reads(apply_other, c, change.kind, value, by_name, wan)
         else:
             reads(apply_network, c, change.kind, value, wan)
+    finally:
+        c.close()
+    return collect(cfg)
+
+
+def apply_port(cfg: Config, change: Any) -> list[Device]:
+    if not isinstance(change.value, bool):
+        raise PluginError("port.enabled takes true or false")
+    c = client_from(cfg)
+    try:
+        system_status(c)
+        try:
+            status = {text(r.get("hwif")): r for r in rows(c, "interfaces")}
+        except (Forbidden, NotFound):
+            status = {}
+        port = change.port or ""
+        reads(manage.port_enabled, c, port, change.value, status.get(port))
     finally:
         c.close()
     return collect(cfg)

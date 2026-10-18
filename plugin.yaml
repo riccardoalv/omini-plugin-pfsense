@@ -9,13 +9,15 @@ description: >-
   interfaces with link speed and traffic, WANs and gateway status, ARP, DHCP
   leases and pool usage, VLANs, LAGGs, services, VPN peers, firewall states,
   local DNS names, paused devices, NAT port forwards, CPU, memory, swap, load,
-  temperature and uptime. It also manages each VLAN's network (VLAN, interface, gateway, DHCP
-  range and access rules), the DHCP server's fixed addresses, the DNS
-  Resolver's local names and paused devices, and sends Wake-on-LAN packets,
-  when its user has the write privileges.
+  temperature and uptime. It also turns interfaces on or off, manages each
+  VLAN's network (VLAN, interface, gateway, DHCP range and access rules), the
+  DHCP server's fixed addresses, the DNS Resolver's local names and paused
+  devices, and sends Wake-on-LAN packets, when its user has the write
+  privileges.
 author: Omini
 homepage: https://github.com/riccardoalv/omini-plugin-pfsense
 changes:
+  - port.enabled
   - network.set
   - network.delete
   - reservation.set
