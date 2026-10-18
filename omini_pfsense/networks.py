@@ -182,6 +182,11 @@ def interfaces_of(r: dict[str, Any]) -> list[str]:
     return [text(v) for v in value or [] if text(v)]
 
 
+def own(r: dict[str, Any], ifname: str) -> bool:
+    """A rule of the interface alone: not floating, on no other interface."""
+    return interfaces_of(r) == [ifname] and r.get("floating") is not True
+
+
 def is_pause_rule(r: dict[str, Any]) -> bool:
     """A rule that blocks the paused devices (pause.set), on top of any access."""
     return text(r.get("source")) == PAUSED_ALIAS
@@ -203,7 +208,7 @@ def rule_shape(r: dict[str, Any], ifname: str) -> str:
     src = text(r.get("source")).lower()
     dst = text(r.get("destination")).lower()
     port = text(r.get("destination_port")).lower()
-    if interfaces_of(r) != [ifname] or r.get("floating") is True:
+    if not own(r, ifname):
         return "other"
     if src != ifname.lower():
         return "other"
@@ -441,15 +446,17 @@ def preset_rules(access: str, ifname: str, name: str) -> list[dict[str, Any]]:
 
 
 def delete_rules(c: Client, st: State, ifname: str, keep_pause: bool = False) -> bool:
-    """Removes the interface's rules, the last first (ids are positions); with
-    keep_pause, the paused devices' block stays."""
+    """Removes the interface's own rules, the last first (ids are positions);
+    rules it shares with other interfaces stay (the floating block of paused
+    devices is Omini's own on each interface). With keep_pause (a new
+    access), the paused devices' block and the disabled rules stay too."""
     found = sorted(
         (
             r
             for r in st.rules or []
-            if ifname in interfaces_of(r)
+            if (own(r, ifname) or (is_pause_rule(r) and interfaces_of(r) == [ifname]))
             and isinstance(r.get("id"), int)
-            and not (keep_pause and is_pause_rule(r))
+            and not (keep_pause and (is_pause_rule(r) or r.get("disabled") is True))
         ),
         key=lambda r: r["id"],
         reverse=True,
@@ -471,6 +478,11 @@ def set_access(c: Client, st: State, ifname: str, access: str | None, name: str)
         )
     if access_of(st, ifname) == access:
         return
+    if any(not own(r, ifname) for r in rules_on(st, ifname)):
+        raise PluginError(
+            f"rules {ifname} shares with other interfaces (floating ones too) decide its "
+            "access: change them in pfSense first"
+        )
     if access == "internet":
         ensure_private_alias(c)
     delete_rules(c, st, ifname, keep_pause=True)

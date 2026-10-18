@@ -508,3 +508,36 @@ def test_a_read_the_change_needs_names_its_privilege(router, cfg):
     router.forbidden = {("GET", "/api/v2/interface/vlans")}
     with pytest.raises(PluginError, match=r"REST API - /api/v2/interface/vlans GET"):
         collect_module.apply(cfg, change("network.set", cameras(access="all")))
+
+
+SHARED = [
+    {"type": "pass", "interface": ["opt1", "lan"], "source": "any", "destination": "1.1.1.1"},
+    {
+        "type": "pass",
+        "interface": ["opt1"],
+        "floating": True,
+        "source": "any",
+        "destination": "any",
+    },
+]
+IOT = {"vlan": 20, "gateway": "10.0.20.1/24", "dhcp": {"enabled": False}}
+
+
+def test_rules_shared_with_other_interfaces_are_never_removed(router, cfg):
+    router.rules += copy.deepcopy(SHARED)
+    with pytest.raises(PluginError, match="change them in pfSense first"):
+        collect_module.apply(cfg, change("network.set", {**IOT, "access": "all"}))
+    assert ("DELETE", "/api/v2/firewall/rule") not in router.writes
+    # Removing the network leaves them (pfSense then refuses to drop the interface).
+    with pytest.raises(PluginError, match="in use"):
+        collect_module.apply(cfg, change("network.delete", {"vlan": 20}))
+    assert all(r in router.rules for r in SHARED)
+    assert not [r for r in router.rules if r["interface"] == ["opt1"] and not r.get("floating")]
+
+
+def test_a_new_access_keeps_the_disabled_rules(router, cfg):
+    off = {"type": "block", "interface": ["opt1"], "source": "opt1", "destination": "any"}
+    router.rules.append({**off, "disabled": True})
+    collect_module.apply(cfg, change("network.set", {**IOT, "access": "all"}))
+    assert {**off, "disabled": True} in router.rules
+    assert [r["destination"] for r in router.on("opt1") if not r.get("disabled")] == ["any"]
