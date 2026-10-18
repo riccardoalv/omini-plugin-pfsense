@@ -28,7 +28,7 @@
 ## Requirements
 
 - **pfSense CE 2.7.2 or later, or pfSense Plus 24.03 or later**, with the **REST API package v2** (`pfSense-pkg-RESTAPI`, version 2.0 or later). Each package release is built for specific pfSense versions; the latest supports CE 2.8.1 / 2.9.0 and Plus 25.11.1 and later, and older v2 releases support CE 2.7.2 and Plus 24.03 / 24.11 (see the [releases page](https://github.com/pfrest/pfSense-pkg-RESTAPI/releases)). There is no v2 build for Plus 23.09 or CE 2.7.0 / 2.7.1.
-- Omini 0.2 or later (the SDK with VLANs, services, VPN peers, DHCP pools and firewall states); changing networks needs an Omini whose SDK has networks and configuration changes (1.2 or later); local DNS names, Wake-on-LAN, pausing devices and LAGGs need an Omini that knows them (the release after 1.2).
+- Omini 1.0 or later (the SDK with VLANs, services, VPN peers, DHCP pools and firewall states); changing networks needs an Omini whose SDK has networks and configuration changes (1.2 or later); local DNS names, Wake-on-LAN, pausing devices and LAGGs need an Omini that knows them (the release after 1.2).
 
 ## Install the REST API package on pfSense
 
