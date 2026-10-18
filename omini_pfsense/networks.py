@@ -90,6 +90,13 @@ def text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def vlan_tag(value: Any) -> int | None:
+    """A VLAN's tag: a number, or a numeric string ("20")."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return int(value.strip()) if isinstance(value, str) and value.strip().isdigit() else None
+
+
 @dataclass
 class Assigned:
     """An assigned interface: lan, opt3..."""
@@ -139,8 +146,8 @@ def read_state(c: Client, wan_devices: set[str]) -> State | None:
         )
     with contextlib.suppress(NotFound, Forbidden):
         for r in rows(c, VLANS):
-            tag, parent = r.get("tag"), text(r.get("if"))
-            if not isinstance(tag, int) or not parent:
+            tag, parent = vlan_tag(r.get("tag")), text(r.get("if"))
+            if tag is None or not parent:
                 continue
             device = text(r.get("vlanif")) or f"{parent}.{tag}"
             st.vlans[device] = {"id": r.get("id"), "tag": tag, "parent": parent}
@@ -325,7 +332,7 @@ def ensure_vlan(c: Client, st: State, vid: int, parent: str, name: str) -> str:
     check_parent(parent, vid)
     write(c.post, VLAN, {"if": parent, "tag": vid, "descr": f"{PREFIX}{name or f'VLAN {vid}'}"})
     for r in rows(c, VLANS):
-        if r.get("tag") == vid and text(r.get("if")) == parent:
+        if vlan_tag(r.get("tag")) == vid and text(r.get("if")) == parent:
             device = text(r.get("vlanif")) or f"{parent}.{vid}"
             st.vlans[device] = {"id": r.get("id"), "tag": vid, "parent": parent}
             return device

@@ -541,3 +541,14 @@ def test_a_new_access_keeps_the_disabled_rules(router, cfg):
     collect_module.apply(cfg, change("network.set", {**IOT, "access": "all"}))
     assert {**off, "disabled": True} in router.rules
     assert [r["destination"] for r in router.on("opt1") if not r.get("disabled")] == ["any"]
+
+
+def test_a_vlan_tag_given_as_a_string_counts(router, cfg):
+    for v in router.vlans:
+        v["tag"] = str(v["tag"])
+    [fw] = collect_module.collect(cfg)
+    assert 20 in networks([fw])
+    assert 20 in [v.id for v in fw.vlans]
+    collect_module.apply(cfg, change("network.set", cameras(vlan=30, gateway="10.0.30.1/24")))
+    assert [v["tag"] for v in router.vlans] == ["20", "30"]  # the VLAN there is used
+    collect_module.apply(cfg, change("network.set", cameras()))

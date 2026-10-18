@@ -310,7 +310,7 @@ def interfaces(
             v = vlan_of.get(hwif) or {}
             m = VLAN_NAME.match(hwif)
             parent = text(v.get("if")) or (m.group("parent") if m else None)
-            tag = int(v["tag"]) if isinstance(v.get("tag"), int) else None
+            tag = nets.vlan_tag(v.get("tag"))
             if tag is None and m:
                 tag = int(m.group("tag"))
             if not speed and parent:
@@ -477,8 +477,8 @@ def vlans(vlan_rows: list[dict[str, Any]], by_name: dict[str, dict[str, Any]]) -
     }
     out = []
     for v in vlan_rows:
-        tag = v.get("tag")
-        if not isinstance(tag, int) or not 1 <= tag <= 4094:
+        tag = nets.vlan_tag(v.get("tag"))
+        if tag is None or not 1 <= tag <= 4094:
             continue
         vlanif = text(v.get("vlanif")) or (f"{v['if']}.{tag}" if text(v.get("if")) else None)
         out.append(
