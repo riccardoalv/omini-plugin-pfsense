@@ -107,17 +107,38 @@ def overrides(c: Client) -> list[dict[str, Any]]:
     return nets.rows(c, HOST_OVERRIDES)
 
 
-def dns_records(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Every name the host overrides answer (theirs and their aliases'), IPv4 only."""
+def any_ipv6(value: Any) -> str | None:
+    try:
+        return str(ipaddress.IPv6Address(text(value)))
+    except ValueError:
+        return None
+
+
+def ip_any(value: Any) -> str | None:
+    return ipv4(value) or any_ipv6(value)
+
+
+def v6_of(r: dict[str, Any]) -> list[str]:
+    """The IPv6 addresses of a host override: its AAAA records, which Omini
+    keeps as they are (it sets A records only)."""
+    return [a for a in addresses(r.get("ip")) if any_ipv6(a)]
+
+
+def dns_records(rows: list[dict[str, Any]], v4_only: bool = False) -> list[dict[str, str]]:
+    """Every name the host overrides answer (theirs and their aliases'), A
+    and AAAA records (IPv4 only with v4_only)."""
+    read = ipv4 if v4_only else ip_any
     found: set[tuple[str, str]] = set()
     for r in rows:
-        ips = [ip for ip in (ipv4(a) for a in addresses(r.get("ip"))) if ip]
+        ips = [ip for ip in (read(a) for a in addresses(r.get("ip"))) if ip]
         names = [n for n in (fqdn(r.get("host"), r.get("domain")), *alias_names(r)) if n]
         found |= {(n, ip) for n in names for ip in ips}
-    return [
-        {"name": n, "ip": ip}
-        for n, ip in sorted(found, key=lambda x: (x[0], ipaddress.IPv4Address(x[1])))
-    ]
+
+    def key(x: tuple[str, str]) -> tuple[str, int, int]:
+        a = ipaddress.ip_address(x[1])
+        return x[0], a.version, int(a)
+
+    return [{"name": n, "ip": ip} for n, ip in sorted(found, key=key)]
 
 
 def dns_name(value: Any) -> str:
@@ -130,7 +151,8 @@ def dns_name(value: Any) -> str:
 
 
 def answers(c: Client, name: str) -> set[str]:
-    return {r["ip"] for r in dns_records(overrides(c)) if r["name"] == name}
+    """The IPv4 addresses the name answers (the A records Omini sets)."""
+    return {r["ip"] for r in dns_records(overrides(c), v4_only=True) if r["name"] == name}
 
 
 def check_not_alias(rows: list[dict[str, Any]], name: str) -> None:
@@ -142,9 +164,22 @@ def check_not_alias(rows: list[dict[str, Any]], name: str) -> None:
         )
 
 
+def drop_v4(c: Client, r: dict[str, Any]) -> bool:
+    """Takes a host override's IPv4 addresses away: removes it, or keeps it
+    with its IPv6 ones (AAAA records Omini never deletes). Whether it wrote."""
+    v6 = v6_of(r)
+    if not v6:
+        nets.write(c.delete, HOST_OVERRIDE, {"id": r["id"]})
+        return True
+    if addresses(r.get("ip")) != v6:
+        nets.write(c.patch, HOST_OVERRIDE, {"id": r["id"], "ip": v6})
+        return True
+    return False
+
+
 def dns_set(c: Client, value: dict[str, Any]) -> None:
     """Creates the host override, or points the one with that exact name to
-    the address (it keeps its own description)."""
+    the address (it keeps its own description and IPv6 addresses)."""
     name, ip = dns_name(value.get("name")), ipv4(value.get("ip"))
     if ip is None:
         raise PluginError(f"{value.get('ip')!r} is not an IPv4 address")
@@ -161,25 +196,31 @@ def dns_set(c: Client, value: dict[str, Any]) -> None:
         )
     else:
         first, rest = mine[0], mine[1:]
-        for r in reversed(rest):  # the same name twice: one is enough
-            nets.write(c.delete, HOST_OVERRIDE, {"id": r["id"]})
-        if addresses(first.get("ip")) != [ip]:
-            nets.write(c.patch, HOST_OVERRIDE, {"id": first["id"], "ip": [ip]})
-        elif not rest:
+        wrote = False
+        for r in reversed(rest):  # the same name twice: one address is enough
+            wrote = drop_v4(c, r) or wrote
+        want = [ip, *v6_of(first)]
+        if addresses(first.get("ip")) != want:
+            nets.write(c.patch, HOST_OVERRIDE, {"id": first["id"], "ip": want})
+        elif not wrote:
             return
     nets.write(c.post, DNS_APPLY)
     nets.wait_for(lambda: answers(c, name) == {ip}, f"the DNS name {name}")
 
 
 def dns_delete(c: Client, value: dict[str, Any]) -> None:
+    """Removes the name's IPv4 addresses (A records); its IPv6 ones stay."""
     name = dns_name(value.get("name"))
     rows = overrides(c)
     mine = [r for r in rows if fqdn(r.get("host"), r.get("domain")) == name]
     if not mine:
         check_not_alias(rows, name)
         return
+    wrote = False
     for r in sorted(mine, key=lambda r: r.get("id", 0), reverse=True):
-        nets.write(c.delete, HOST_OVERRIDE, {"id": r["id"]})
+        wrote = drop_v4(c, r) or wrote
+    if not wrote:
+        return
     nets.write(c.post, DNS_APPLY)
     nets.wait_for(lambda: not answers(c, name), f"the removal of {name}")
 

@@ -12,7 +12,7 @@
 | WANs: interfaces with an upstream gateway (and pfSense's default WAN) | WAN nodes on the map |
 | Gateways: status, latency, loss (dpinger) | WAN uplinks up / degraded / down |
 | ARP table | Which IP and MAC are on which port |
-| DHCP leases (ISC or Kea, whichever is in use) and static mappings | Names of devices the network scan only knows by MAC |
+| DHCP leases (ISC or Kea, whichever is in use) and static mappings; an IPv6 lease too when the package reports one with a MAC | Names of devices the network scan only knows by MAC |
 | DHCP pool usage: addresses of each enabled server's ranges, against its active leases | A pool running out of addresses |
 | Hostname, version, platform (e.g. *Netgate 4200*), serial, CPU, memory, swap, load, temperature, uptime | Firewall health |
 | VLANs: tag, description, parent port, subnet | VLANs of the network |
@@ -22,7 +22,7 @@
 | Each VLAN's network: interface, gateway, DHCP range, access read from its firewall rules (needs the *interfaces* GET privilege below) | The networks Omini can change |
 | DHCP static mappings | Fixed addresses |
 | LAGGs: each member port and its LAGG (`lagg0`) | Cables of a LAG drawn as one link |
-| DNS Resolver host overrides (and their aliases), IPv4; the system domain | Local DNS names, and the domain new names get |
+| DNS Resolver host overrides (and their aliases), A and AAAA (IPv6) records; the system domain | Local DNS names, and the domain new names get |
 | The alias `omini_paused` | Devices whose internet is paused (their IPv4 addresses) |
 | NAT port forwards (Firewall → NAT → Port Forward): protocol, external port or range, target address and port, source, interface, description, on or off | The **Exposed to the internet** section (Omini never changes them) |
 | NAT port forwards (Firewall → NAT → Port Forward): protocol, external port or range, target address and port, source, interface, description, on or off | The **Exposed to the internet** section (Omini never changes them) |
@@ -150,8 +150,8 @@ Changes are applied only when you confirm one in Omini (Omini's guarded changes)
 | **network.delete** | Removes the network's rules, its DHCP server (`DELETE /api/v2/services/dhcp_server`, or turned off on older packages), the interface assignment (`DELETE /api/v2/interface`) and the VLAN (`DELETE /api/v2/interface/vlan`). Never the LAN, never a WAN |
 | **reservation.set** | A static mapping on the DHCP server of the network the address is in (`POST`/`PATCH /api/v2/services/dhcp_server/static_mapping`, then `…/dhcp_server/apply`); a mapping of the same MAC on another network moves |
 | **reservation.delete** | Removes the MAC's static mappings |
-| **dns.set** | A DNS Resolver host override for the name (`POST /api/v2/services/dns_resolver/host_override` with `host`, `domain`, `ip` and description *Omini*), or the address of the one with that exact name changed (`PATCH`, its description kept; a second override of the same name is removed); then `POST /api/v2/services/dns_resolver/apply`. A name that is an alias of another override is refused (change it in pfSense) |
-| **dns.delete** | Removes the host overrides with that name (`DELETE …/host_override`), then applies |
+| **dns.set** | A DNS Resolver host override for the name (`POST /api/v2/services/dns_resolver/host_override` with `host`, `domain`, `ip` and description *Omini*), or the address of the one with that exact name changed (`PATCH`, its description and IPv6 addresses kept; a second override of the same name is removed, or keeps only its IPv6 addresses); then `POST /api/v2/services/dns_resolver/apply`. A name that is an alias of another override is refused (change it in pfSense) |
+| **dns.delete** | Removes the host overrides with that name (`DELETE …/host_override`), then applies. Omini sets A records only: an override that also has IPv6 addresses (AAAA records someone else made) keeps them and loses only its IPv4 ones (`PATCH`); a name with only AAAA records is left as it is |
 | **wol.send** | `POST /api/v2/services/wake_on_lan/send` with the interface whose network holds the device's address (the LAN without one; never a WAN) and the MAC. Nothing is changed or saved |
 | **pause.set** | Puts the device's addresses in the host alias `omini_paused` (`POST`/`PATCH /api/v2/firewall/alias`; each address's description is `Omini <MAC> <name>`, so the alias says which device each one is), replacing the ones the MAC had: the IPv4 addresses Omini sent and the device's IPv6 addresses from the router's NDP table (when the API user may read it, below); the other paused devices' IPv6 entries are refreshed from the NDP table at the same time. Writes the network alias `omini_local` (what a paused device still reaches); makes sure each interface with a private static address (not the WANs, DHCP clients or VPNs) has the block rule (below; `POST /api/v2/firewall/rule`), replacing the IPv4-only rules of 0.2.0; `POST /api/v2/firewall/apply`; then removes the device's open IPv4 connections (`DELETE /api/v2/firewall/states` with `source__startswith=<ip>:` and, for NATed ones, `source__contains=(<ip>:`), best effort. pfSense's own addresses are refused |
 | **pause.delete** | Takes the MAC's addresses (IPv4 and IPv6) out of the alias; when it is left empty, removes the block rules and both aliases `omini_paused` and `omini_local` (`DELETE /api/v2/firewall/rule`, `DELETE /api/v2/firewall/alias`); applies. A device paused by 0.2.0 resumes the same way |
@@ -204,7 +204,7 @@ These let the key change interfaces, DHCP and firewall rules anywhere on the fir
 
 ### Not verified on hardware
 
-The changes, and the reads added since 0.2 (port forwards), follow the package's [OpenAPI schema](https://pfrest.org/api-docs/openapi.json) and were tested against a fake that answers like it, **not against a real pfSense**. Assumed from the schema and not yet seen on a device:
+The changes, and the reads added since 0.2 (port forwards, IPv6), follow the package's [OpenAPI schema](https://pfrest.org/api-docs/openapi.json) and were tested against a fake that answers like it, **not against a real pfSense**. Assumed from the schema and not yet seen on a device:
 
 - Ids: an interface's id is its pfSense name (`opt3`) and the `POST /api/v2/interface` answer carries it; a DHCP server's id is its interface's name; VLAN, rule and static-mapping ids are positions in their lists and move down when an earlier one is removed (the plugin removes from the last).
 - Fields: VLAN `if`/`tag`/`descr`/`vlanif`; interface `if`/`descr`/`enable`/`typev4: static`/`ipaddr`/`subnet`; DHCP server `interface`/`enable`/`range_from`/`range_to`/`dnsserver`/`staticmap[]`; static mapping `parent_id`/`id`/`mac`/`ipaddr`/`hostname`/`descr`; rule `type`/`interface[]`/`ipprotocol`/`protocol`/`source`/`destination` (`optN:ip` for the interface address)/`destination_port`/`descr`/`disabled`/`floating`; alias `name`/`type`/`address[]`/`detail[]`.
@@ -212,6 +212,7 @@ The changes, and the reads added since 0.2 (port forwards), follow the package's
 - That a static interface without a DHCP server can get one with `POST /api/v2/services/dhcp_server` (older packages: `PATCH` it), and that pfSense refuses to remove an interface still used by rules or DHCP (the plugin removes those first).
 - `/api/v2/interface/apply` applies every pending interface change, including ones made by hand and not applied yet.
 - DNS: host override fields `host`/`domain`/`ip[]`/`descr`/`aliases[]` and positional ids; that `…/dns_resolver/apply` makes Unbound answer at once (the plugin reads the overrides back, not the resolver's answers).
+- IPv6: that a host override's `ip[]` holds IPv6 addresses next to IPv4 ones and a `PATCH` keeps the order given; that `/api/v2/status/gateways` lists the IPv6 (DHCP6) gateways with their `srcip`; whether `/api/v2/status/dhcp_server/leases` ever reports DHCPv6 leases (with a MAC) — they are kept when it does.
 - Wake-on-LAN: that `interface` takes pfSense's interface name (`lan`, `opt1`) and `mac_addr` a colon-separated MAC.
 - Pausing: alias `address[]`/`detail[]` kept in step and returned as lists; `PATCH` replacing both; rule fields `floating`/`quick`/`direction: in`/`ipprotocol: inet46` with an inverted alias destination (`!omini_local`); that a host alias takes IPv6 addresses and a network alias IPv6 networks next to IPv4 ones; the `output` of `POST /api/v2/diagnostics/command_prompt` and the column layout of FreeBSD's `ndp -an` (address, MAC); `ipaddrv6`/`subnetv6` of `/api/v2/status/interfaces` for a tracked (DHCPv6-PD) LAN; that a floating quick block on an interface is evaluated before that interface's own pass rules (pfSense's documented order); the state-kill filters `source__startswith` and `source__contains` on `DELETE /api/v2/firewall/states`, and the `ip:port` / `wan:port (ip:port)` shape of a state's `source`.
 - LAGGs: `GET /api/v2/interface/laggs` with `laggif` and `members[]` as real port names.
@@ -225,6 +226,7 @@ The changes, and the reads added since 0.2 (port forwards), follow the package's
 - **Temperature**: a single value, pfSense's system temperature (first CPU core, else the ACPI thermal zone).
 - **Disks**: the API reports only the use of `/` as a percentage, with no sizes, so disks are not reported.
 - **Updates**: the API has no pending-update status, so only the installed version is reported (Omini never starts an update check).
+- **DHCPv6 leases**: the REST API has no endpoint for them (the leases endpoint reads the IPv4 server), so IPv6 leases are only reported if it lists any with a MAC. The NDP table has no endpoint either, so `ndp` is not reported.
 - **DHCP lease end times** are left out: pfSense formats them in UTC or local time depending on a setting the API does not show.
 - **PPPoE / PPP WANs**: the API does not say which port carries the PPP link, so such a WAN has no link speed.
 - **Bridges**: their member ports are not in the API, so they are not reported. LAGG members come from the LAGG's own configuration, with no status, speed or counters of their own.

@@ -136,7 +136,11 @@ def records(devices):
 
 def test_reads_names_domain_and_laggs(box, cfg):
     [fw] = collect_module.collect(cfg)
-    assert records([fw]) == [("files.home.arpa", "192.168.1.20"), ("nas.home.arpa", "192.168.1.20")]
+    assert records([fw]) == [
+        ("files.home.arpa", "192.168.1.20"),
+        ("nas.home.arpa", "192.168.1.20"),
+        ("v6only.home.arpa", "fd00::5"),  # AAAA records are read too
+    ]
     assert fw.dns_domain == "home.arpa"
     assert fw.paused is None
     ifaces = {i.name: i for i in fw.interfaces}
@@ -228,13 +232,56 @@ def test_a_name_that_never_shows_fails(box, cfg):
 def test_removes_a_dns_name(box, cfg):
     devices = collect_module.apply(cfg, change("dns.delete", {"name": "nas.home.arpa"}))
     assert [o["host"] for o in box.overrides] == ["v6only"]
-    assert records(devices) == []
+    assert records(devices) == [("v6only.home.arpa", "fd00::5")]  # another name, kept
     assert box.dns_applied == 1
 
 
 def test_removing_a_name_that_is_not_there_changes_nothing(box, cfg):
     collect_module.apply(cfg, change("dns.delete", {"name": "ghost.home.arpa"}))
     assert box.writes == []
+
+
+def test_setting_a_name_keeps_its_ipv6_addresses(box, cfg):
+    box.overrides[0]["ip"] = ["192.168.1.20", "fd00::20"]
+    devices = collect_module.apply(
+        cfg, change("dns.set", {"name": "nas.home.arpa", "ip": "192.168.1.21"})
+    )
+    assert box.overrides[0]["ip"] == ["192.168.1.21", "fd00::20"]
+    assert ("nas.home.arpa", "fd00::20") in records(devices)
+
+
+def test_a_name_with_only_an_aaaa_record_gets_its_a_record(box, cfg):
+    collect_module.apply(cfg, change("dns.set", {"name": "v6only.home.arpa", "ip": "192.168.1.5"}))
+    assert box.overrides[1]["ip"] == ["192.168.1.5", "fd00::5"]
+    assert len(box.overrides) == 2
+
+
+def test_a_duplicate_with_ipv6_keeps_its_ipv6(box, cfg):
+    box.overrides.append(
+        {"host": "nas", "domain": "home.arpa", "ip": ["192.168.1.99", "fd00::99"], "aliases": []}
+    )
+    devices = collect_module.apply(
+        cfg, change("dns.set", {"name": "nas.home.arpa", "ip": "192.168.1.20"})
+    )
+    assert box.overrides[2]["ip"] == ["fd00::99"]
+    assert [ip for n, ip in records(devices) if n == "nas.home.arpa"] == [
+        "192.168.1.20",
+        "fd00::99",
+    ]
+
+
+def test_removing_a_name_never_removes_its_ipv6(box, cfg):
+    box.overrides[0]["ip"] = ["192.168.1.20", "fd00::20"]
+    devices = collect_module.apply(cfg, change("dns.delete", {"name": "nas.home.arpa"}))
+    assert box.overrides[0]["ip"] == ["fd00::20"]
+    assert [ip for n, ip in records(devices) if n == "nas.home.arpa"] == ["fd00::20"]
+    assert box.dns_applied == 1
+
+
+def test_removing_a_name_with_only_aaaa_records_changes_nothing(box, cfg):
+    collect_module.apply(cfg, change("dns.delete", {"name": "v6only.home.arpa"}))
+    assert box.writes == []
+    assert box.overrides[1]["ip"] == ["fd00::5"]
 
 
 def test_an_alias_is_changed_in_pfsense(box, cfg):

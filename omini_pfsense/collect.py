@@ -248,6 +248,20 @@ def network(ip: Any, prefix: Any) -> str | None:
         return None
 
 
+def ip_or_none(value: Any) -> str | None:
+    """An IPv4 or IPv6 address, normalized; None for anything else (an alias)."""
+    try:
+        return str(ipaddress.ip_address(text(value) or ""))
+    except ValueError:
+        return None
+
+
+def address_key(ip: str) -> tuple[int, int]:
+    """Sorts IPv4 before IPv6, each in numeric order."""
+    a = ipaddress.ip_address(ip)
+    return a.version, int(a)
+
+
 # --- readers ---------------------------------------------------------------
 
 
@@ -446,13 +460,14 @@ def leases(c: Client) -> list[DhcpLease]:
     depending on a setting the API does not show."""
     found: dict[tuple[str, str], DhcpLease] = {}
     for r in rows(c, "dhcp"):
-        m, ip = mac(r.get("mac")), text(r.get("ip"))
-        if not m or not ip or ":" in ip:
+        # IPv6 leases are kept too, when the package reports one with a MAC.
+        m, ip = mac(r.get("mac")), ip_or_none(r.get("ip"))
+        if not m or not ip:
             continue
         if str(r.get("active_status") or "").strip().lower() in GONE:
             continue
         found[(ip, m)] = DhcpLease(ip=ip, mac=m, hostname=text(r.get("hostname")))
-    return sorted(found.values(), key=lambda lease: ipaddress.ip_address(lease.ip))
+    return sorted(found.values(), key=lambda lease: address_key(lease.ip))
 
 
 def services(c: Client) -> list[Service]:
@@ -508,7 +523,7 @@ def dhcp_pools(
 ) -> list[DhcpPool]:
     """Usage of each enabled DHCP server: the addresses of its main range and
     extra pools, and the active leases in them."""
-    leased = [ipaddress.ip_address(lease.ip) for lease in active]
+    leased = [ipaddress.ip_address(lease.ip) for lease in active if "." in lease.ip]
     out = []
     for server in rows(c, "dhcp_pools"):
         if server.get("enable") is False:
@@ -772,13 +787,6 @@ def port_range(value: Any) -> tuple[int | None, int | None]:
     return lo, hi if hi != lo else None
 
 
-def ip_or_none(value: Any) -> str | None:
-    try:
-        return str(ipaddress.ip_address(text(value) or ""))
-    except ValueError:
-        return None
-
-
 def port_forwards(c: Client, by_name: dict[str, dict[str, Any]]) -> list[PortForward]:
     """NAT port forwards (Firewall → NAT → Port Forward). A "no redirect" rule
     forwards nothing; one whose external port is an alias, or for a protocol
@@ -844,8 +852,8 @@ def collect(cfg: Config) -> list[Device]:
         lan = by_name.get("lan") or {}
         macs = sorted({i.mac for i in ifaces if i.mac})
         ips = sorted(
-            {ip.split("/")[0] for i in ifaces for ip in (i.ips or []) if "." in ip},
-            key=ipaddress.ip_address,
+            {ip.split("/")[0] for i in ifaces for ip in (i.ips or [])},
+            key=address_key,
         )
         hostname = text(names.get("hostname"))
         domain = text(names.get("domain"))

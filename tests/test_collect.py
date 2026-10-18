@@ -27,7 +27,10 @@ def test_reads_the_firewall(pfsense, cfg):
     assert fw.load_avg == [0.21, 0.18, 0.15]
     assert [(t.sensor, t.kind, t.celsius) for t in fw.temperatures] == [("CPU", "cpu", 48.5)]
     assert fw.storage is None  # only a percentage is reported, no sizes
-    assert fw.ips == ["10.0.20.1", "10.6.0.1", "172.16.0.1", "192.168.1.1", "203.0.113.10"]
+    assert fw.ips == [
+        *["10.0.20.1", "10.6.0.1", "172.16.0.1", "192.168.1.1", "203.0.113.10"],
+        "fd00::1",  # IPv6 too; link-local left out
+    ]
     assert (fw.firewall_states.current, fw.firewall_states.limit) == (1234, 1622000)
 
 
@@ -351,3 +354,39 @@ def test_port_range(value, expected):
     from omini_pfsense.collect import port_range
 
     assert port_range(value) == expected
+
+
+def test_ipv6_leases_with_a_mac_are_kept(pfsense, cfg):
+    leases = pfsense.routes["/api/v2/status/dhcp_server/leases"]["data"]
+    leases.append({**leases[0], "id": 9, "ip": "fd00::100", "mac": "aa:bb:cc:dd:ee:10"})
+    leases.append({**leases[0], "id": 10, "ip": "fd00::101", "mac": ""})  # a DUID only
+    [fw] = collect(cfg)
+    assert [lease.ip for lease in fw.dhcp_leases] == [
+        "10.0.20.7",
+        "192.168.1.20",
+        "192.168.1.100",
+        "fd00::100",
+    ]
+    assert fw.dhcp_pools  # pool usage still counts IPv4 leases only
+
+
+def test_ipv6_gateway(pfsense, cfg):
+    wan = pfsense.routes["/api/v2/status/interfaces"]["data"][0]
+    wan.update(ipaddrv6="2001:db8:1::10", subnetv6="64", gatewayv6="fe80::1%igc0")
+    pfsense.routes["/api/v2/status/gateways"]["data"].append(
+        {
+            "id": 3,
+            "name": "WAN_DHCP6",
+            "srcip": "2001:db8:1::10",
+            "monitorip": "fe80::1%igc0",
+            "delay": 2.5,
+            "stddev": 0.1,
+            "loss": 0,
+            "status": "online",
+            "substatus": "none",
+        }
+    )
+    [fw] = collect(cfg)
+    gw = next(g for g in fw.gateways if g.name == "WAN_DHCP6")
+    assert (gw.status, gw.interface, gw.address, gw.rtt_ms) == ("up", "igc0", "fe80::1%igc0", 2.5)
+    assert "2001:db8:1::10" in fw.ips
