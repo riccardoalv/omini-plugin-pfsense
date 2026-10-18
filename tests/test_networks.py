@@ -569,3 +569,11 @@ def test_a_static_mapping_without_an_id_is_left_alone(router, cfg, monkeypatch):
     assert [m["ipaddr"] for m in router.dhcp["lan"]["staticmap"]] == ["192.168.1.20"]
     with pytest.raises(PluginError, match="did not apply"):
         collect_module.apply(cfg, change("reservation.delete", nas))
+
+
+def test_waits_up_to_ten_reads(monkeypatch):
+    monkeypatch.setattr(networks_module.time, "sleep", lambda _s: None)
+    reads = iter(range(10))
+    networks_module.wait_for(lambda: next(reads) == 9, "it")
+    with pytest.raises(PluginError, match="did not apply it"):
+        networks_module.wait_for(lambda: False, "it")

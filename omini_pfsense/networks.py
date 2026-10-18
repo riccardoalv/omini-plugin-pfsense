@@ -552,7 +552,7 @@ def apply_delete(c: Client, st: State, vid: int) -> None:
     remove(c, st, vid)
 
 
-def wait_for(check, what: str, tries: int = 5, pause: float = 1.0) -> None:
+def wait_for(check, what: str, tries: int = 10, pause: float = 1.0) -> None:
     """The API answers once pfSense saved a change; reads again a few times
     in case an interface takes a moment to come up."""
     for i in range(tries):
