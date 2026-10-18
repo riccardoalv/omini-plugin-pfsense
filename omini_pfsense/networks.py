@@ -603,6 +603,15 @@ def mappings(st: State) -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
+def mappings_of(st: State, mac: str) -> list[tuple[str, dict[str, Any]]]:
+    """The MAC's static mappings a change can name: the ones with an id."""
+    return [
+        (i, m)
+        for i, m in mappings(st)
+        if norm_mac(m.get("mac")) == mac and isinstance(m.get("id"), int)
+    ]
+
+
 def reservations(st: State) -> list[dict[str, Any]]:
     out = []
     for _, m in mappings(st):
@@ -635,7 +644,7 @@ def reserve(c: Client, st: State, want: dict[str, Any]) -> None:
             "pick one outside it"
         )
     body = {"mac": mac, "ipaddr": ip, "hostname": hostname(str(want.get("name") or ""))}
-    current = [(i, m) for i, m in mappings(st) if norm_mac(m.get("mac")) == mac]
+    current = mappings_of(st, mac)
     same = next((m for i, m in current if i == ifname), None)
     for i, m in sorted(
         ((i, m) for i, m in current if i != ifname), key=lambda x: x[1]["id"], reverse=True
@@ -651,7 +660,7 @@ def reserve(c: Client, st: State, want: dict[str, Any]) -> None:
 def unreserve(c: Client, st: State, mac_value: Any) -> None:
     mac = norm_mac(mac_value)
     found = sorted(
-        ((i, m) for i, m in mappings(st) if norm_mac(m.get("mac")) == mac),
+        mappings_of(st, mac),
         key=lambda x: (x[0], x[1]["id"]),
         reverse=True,
     )

@@ -552,3 +552,20 @@ def test_a_vlan_tag_given_as_a_string_counts(router, cfg):
     collect_module.apply(cfg, change("network.set", cameras(vlan=30, gateway="10.0.30.1/24")))
     assert [v["tag"] for v in router.vlans] == ["20", "30"]  # the VLAN there is used
     collect_module.apply(cfg, change("network.set", cameras()))
+
+
+def test_a_static_mapping_without_an_id_is_left_alone(router, cfg, monkeypatch):
+    server = router.server
+
+    def no_ids(ifname):
+        s = server(ifname)
+        s["staticmap"] = [{k: v for k, v in m.items() if k != "id"} for m in s["staticmap"]]
+        return s
+
+    monkeypatch.setattr(router, "server", no_ids)
+    nas = {"mac": "aa:bb:cc:dd:ee:12", "ip": "10.0.20.60"}
+    collect_module.apply(cfg, change("reservation.set", nas))
+    assert [m["ipaddr"] for m in router.dhcp["opt1"]["staticmap"]] == ["10.0.20.60"]
+    assert [m["ipaddr"] for m in router.dhcp["lan"]["staticmap"]] == ["192.168.1.20"]
+    with pytest.raises(PluginError, match="did not apply"):
+        collect_module.apply(cfg, change("reservation.delete", nas))
