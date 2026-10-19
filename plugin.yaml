@@ -1,6 +1,6 @@
 id: pfsense
 name: pfSense
-version: 0.2.1
+version: 0.3.0
 protocol: 1
 entrypoint: main.py
 timeout_s: 60
