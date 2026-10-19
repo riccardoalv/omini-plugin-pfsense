@@ -26,6 +26,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from omini_sdk import PluginError
+from omini_sdk.changes import apply_verify
 
 from omini_pfsense.client import Client, Forbidden, NotFound
 
@@ -552,15 +553,26 @@ def apply_delete(c: Client, st: State, vid: int) -> None:
     remove(c, st, vid)
 
 
-def wait_for(check, what: str, tries: int = 10, pause: float = 1.0) -> None:
-    """The API answers once pfSense saved a change; reads again a few times
-    in case an interface takes a moment to come up."""
-    for i in range(tries):
-        if check():
-            return
-        if i < tries - 1:
-            time.sleep(pause)
-    raise PluginError(f"pfSense did not apply {what}")
+# How long a change waits for pfSense to show it (the SDK's window).
+VERIFY_S = 30
+POLL_S = 2
+
+
+def wait_for(check, what: str, apply=None, undo=None) -> None:
+    """The API answers once pfSense saved a change; reads again (every POLL_S
+    seconds, up to VERIFY_S) in case an interface takes a moment to come up,
+    and a read that fails meanwhile is read again. ``apply`` runs first and
+    ``undo`` puts things back when the change does not hold (and must raise
+    when it cannot)."""
+    apply_verify(
+        apply or (lambda: None),
+        check,
+        undo,
+        timeout=VERIFY_S,
+        interval=POLL_S,
+        message=f"pfSense did not apply {what}",
+        sleep=time.sleep,
+    )
 
 
 def matches(st: State | None, want: dict[str, Any]) -> bool:

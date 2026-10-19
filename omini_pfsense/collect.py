@@ -27,6 +27,8 @@ from omini_sdk import (
     VpnPeer,
     log,
 )
+from omini_sdk import optional as sdk_optional
+from omini_sdk.http import settings
 from omini_sdk.models import PortForward
 
 from omini_pfsense import manage
@@ -71,7 +73,7 @@ def client_from(cfg: Config) -> Client:
     url, key = cfg.str("url"), cfg.str("api_key")
     if not url or not key:
         raise PluginError("the address and the API key are required")
-    return Client(url, key, verify_tls=cfg.bool("verify_tls", False))
+    return Client(url, key, **settings(cfg))
 
 
 def rows(c: Client, what: str) -> list[dict[str, Any]]:
@@ -86,19 +88,15 @@ def one(c: Client, what: str) -> dict[str, Any]:
 
 
 def optional(what: str, missing: list[str], fn: Callable[[], T], default: T) -> T:
-    """Optional data: a missing privilege or package never fails the collection."""
-    try:
-        return fn()
-    except Forbidden:
-        log.warning("no privilege for %s (%s)", what, privilege(what))
-        missing.append(privilege(what))
-    except NotFound:
-        log.info("%s not available on this pfSense", what)
-    except PluginError:
-        raise
-    except Exception:
-        log.exception("could not read %s", what)
-    return default
+    """Optional data: a missing privilege or package, or a firewall that
+    cannot answer it now, never fails the collection; a missing privilege is
+    reported (by its name in the REST API package)."""
+    denied: list[str] = []
+    out = sdk_optional(what, fn, default, missing=denied)
+    for name in denied:
+        log.warning("no privilege for %s (%s)", what, name)
+        missing.append(name)
+    return out
 
 
 # --- parsing helpers -------------------------------------------------------
@@ -976,7 +974,9 @@ def reads(fn: Callable[..., None], *args: Any) -> None:
     except Forbidden as e:
         raise PluginError(f"give the API user the privilege {e.privilege}") from e
     except NotFound as e:
-        raise PluginError(f"this REST API package has no {e} endpoint: update the package") from e
+        raise PluginError(
+            f"this REST API package has no {e.resource} endpoint: update the package"
+        ) from e
 
 
 def apply_network(c: Client, kind: str, value: dict[str, Any], wan: set[str]) -> None:
@@ -1010,13 +1010,12 @@ def apply_network(c: Client, kind: str, value: dict[str, Any], wan: set[str]) ->
         vid = int(value["vlan"])
         new = nets.find(st, vid) is None
         had_vlan = any(v["tag"] == vid for v in st.vlans.values())
-        try:
-            nets.apply_set(c, st, value)
-            nets.wait_for(lambda: nets.matches(nets.read_state(c, wan), value), "the network")
-        except (PluginError, Forbidden, NotFound):
-            if new and vid != 1:
-                undo(c, wan, vid, had_vlan)
-            raise
+        nets.wait_for(
+            lambda: nets.matches(nets.read_state(c, wan), value),
+            "the network",
+            apply=lambda: nets.apply_set(c, st, value),
+            undo=(lambda: undo(c, wan, vid, had_vlan)) if new and vid != 1 else None,
+        )
     else:
         vid = int(value["vlan"])
         nets.apply_delete(c, st, vid)
@@ -1040,11 +1039,11 @@ def apply_other(
 
 def undo(c: Client, wan: set[str], vid: int, keep_vlan: bool) -> None:
     """Removes what a network.set that failed had created (the VLAN only when
-    it was not there before)."""
-    try:
-        nets.remove(c, nets.read_state(c, wan) or nets.State(), vid, keep_vlan)
-    except Exception:
-        log.exception("could not remove what was created for VLAN %s", vid)
+    it was not there before); raises when it cannot."""
+    st = nets.read_state(c, wan)
+    if st is None:
+        raise PluginError("the interfaces cannot be read")
+    nets.remove(c, st, vid, keep_vlan)
 
 
 def test(cfg: Config) -> str:

@@ -231,10 +231,67 @@ def test_unreachable(monkeypatch, cfg):
     monkeypatch.setattr(
         collect_module,
         "Client",
-        lambda *a, **kw: Client(*a, **kw, transport=httpx.MockTransport(refuse)),
+        lambda *a, **kw: Client(
+            *a, **kw, transport=httpx.MockTransport(refuse), sleep=lambda _s: None
+        ),
     )
     with pytest.raises(PluginError, match="cannot connect"):
         collect(cfg)
+
+
+def test_a_refused_connection_or_a_busy_firewall_is_asked_again(pfsense, cfg, monkeypatch):
+    import omini_pfsense.collect as collect_module
+    from omini_pfsense.client import Client
+
+    answers = {"/api/v2/status/system": ["refuse", 503]}
+
+    def flaky(request):
+        todo = answers.get(request.url.path)
+        if todo:
+            what = todo.pop(0)
+            if what == "refuse":
+                raise httpx.ConnectError("connection refused", request=request)
+            return httpx.Response(what, headers={"Retry-After": "0"})
+        return pfsense.handler(request)
+
+    pauses = []
+    monkeypatch.setattr(
+        collect_module,
+        "Client",
+        lambda *a, **kw: Client(
+            *a, **kw, transport=httpx.MockTransport(flaky), sleep=pauses.append
+        ),
+    )
+    [fw] = collect(cfg)
+    assert fw.name == "pfsense.home.arpa" and len(pauses) == 2
+
+
+def test_an_optional_endpoint_that_fails_is_skipped(pfsense, cfg, monkeypatch):
+    import omini_pfsense.collect as collect_module
+    from omini_pfsense.client import Client
+
+    def broken(request):
+        if request.url.path == "/api/v2/status/gateways":
+            return httpx.Response(500, json={"message": "PHP error"})
+        return pfsense.handler(request)
+
+    monkeypatch.setattr(
+        collect_module,
+        "Client",
+        lambda *a, **kw: Client(*a, **kw, transport=httpx.MockTransport(broken)),
+    )
+    [fw] = collect(cfg)
+    assert fw.gateways is None and fw.interfaces
+
+
+def test_timeout_and_tls_come_from_the_advanced_fields(cfg):
+    from omini_sdk import Config
+
+    from omini_pfsense.collect import client_from
+
+    c = client_from(Config({**cfg, "timeout_s": 40, "verify_tls": True}))
+    assert c.http.timeout.read == 40
+    c.close()
 
 
 def test_key_never_in_errors(pfsense, cfg):

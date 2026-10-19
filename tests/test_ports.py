@@ -76,7 +76,7 @@ def test_a_change_that_does_not_read_back_is_undone(router, cfg, monkeypatch):  
         return original(method, path, q, body)
 
     monkeypatch.setattr(router, "write", stuck)
-    with pytest.raises(PluginError, match="did not apply turning ix0 off"):
+    with pytest.raises(PluginError, match=r"did not apply turning ix0 off: .* \(undone\)$"):
         collect_module.apply(cfg, port("ix0", False))
     assert router.interfaces["opt2"]["enable"] is True
     assert router.writes[-2:] == [

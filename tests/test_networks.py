@@ -407,7 +407,7 @@ def test_removes_rules_from_the_last(router, cfg):
 
 def test_a_network_that_does_not_come_out_as_asked_is_removed(router, cfg):
     router.drop_rules = True
-    with pytest.raises(PluginError, match="did not apply the network"):
+    with pytest.raises(PluginError, match=r"did not apply the network: .* \(undone\)$"):
         collect_module.apply(cfg, change("network.set", cameras()))
     assert "opt3" not in router.interfaces and "opt3" not in router.dhcp
     assert [v["tag"] for v in router.vlans] == [20, 30]
@@ -416,6 +416,13 @@ def test_a_network_that_does_not_come_out_as_asked_is_removed(router, cfg):
         collect_module.apply(cfg, change("network.set", cameras(vlan=30, gateway="10.0.30.1/24")))
     assert [v["tag"] for v in router.vlans] == [20, 30]
     assert "opt3" not in router.interfaces
+
+
+def test_an_undo_that_fails_says_so(router, cfg):
+    router.drop_rules = True
+    router.forbidden.add(("DELETE", "/api/v2/interface"))
+    with pytest.raises(PluginError, match=r"could not be undone: check it on the device\)$"):
+        collect_module.apply(cfg, change("network.set", cameras()))
 
 
 def test_refusals_are_shown(router, cfg):
@@ -571,9 +578,11 @@ def test_a_static_mapping_without_an_id_is_left_alone(router, cfg, monkeypatch):
         collect_module.apply(cfg, change("reservation.delete", nas))
 
 
-def test_waits_up_to_ten_reads(monkeypatch):
+def test_waits_up_to_thirty_seconds(monkeypatch):
     monkeypatch.setattr(networks_module.time, "sleep", lambda _s: None)
     reads = iter(range(10))
     networks_module.wait_for(lambda: next(reads) == 9, "it")
-    with pytest.raises(PluginError, match="did not apply it"):
-        networks_module.wait_for(lambda: False, "it")
+    calls = []
+    with pytest.raises(PluginError, match="did not apply it: it was not seen within 30 s"):
+        networks_module.wait_for(lambda: calls.append(1), "it")
+    assert len(calls) == 16  # every 2 s, up to 30

@@ -30,7 +30,7 @@
 ## Requirements
 
 - **pfSense CE 2.7.2 or later, or pfSense Plus 24.03 or later**, with the **REST API package v2** (`pfSense-pkg-RESTAPI`, version 2.0 or later). Each package release is built for specific pfSense versions; the latest supports CE 2.8.1 / 2.9.0 and Plus 25.11.1 and later, and older v2 releases support CE 2.7.2 and Plus 24.03 / 24.11 (see the [releases page](https://github.com/pfrest/pfSense-pkg-RESTAPI/releases)). There is no v2 build for Plus 23.09 or CE 2.7.0 / 2.7.1.
-- Omini 1.0 or later (the SDK with VLANs, services, VPN peers, DHCP pools and firewall states); changing networks needs an Omini whose SDK has networks and configuration changes (1.2 or later); local DNS names, Wake-on-LAN, pausing devices and LAGGs need an Omini that knows them (the release after 1.2).
+- Omini 1.7 or later (its SDK has the HTTP client, optional reads and change verification this plugin uses).
 
 ## Install the REST API package on pfSense
 
@@ -98,11 +98,12 @@ Missing optional privileges only leave their data out. Do not give the user *Web
 |---|---|
 | Address | The pfSense web interface, e.g. `https://192.168.1.1` (the REST API lives on the same port) |
 | API key | The key from step 2 (stored encrypted, never logged) |
-| Verify the TLS certificate | Off by default, since pfSense uses a self-signed certificate; turn it on if yours is trusted |
+| Verify the TLS certificate (Advanced) | Off by default, since pfSense uses a self-signed certificate; turn it on if yours is trusted |
+| Timeout (Advanced) | Seconds to wait for each answer of the firewall (15 by default) |
 
 ## How it works
 
-One collection = a few `GET` requests with the key in the `X-API-Key` header, each with a 10 s timeout; answers come in the package's envelope (`{"code", "status", "response_id", "message", "data"}`). Plural endpoints are read with `limit=0` (everything). An endpoint the user may not read (403), that this package version does not have (404) or that needs a package that is not installed (424, e.g. WireGuard) is skipped; only `/api/v2/status/system` is required. Endpoint reference: the package's [API docs](https://pfrest.org/api-docs/) and [OpenAPI schema](https://pfrest.org/api-docs/openapi.json).
+One collection = a few `GET` requests with the key in the `X-API-Key` header, each with the form's timeout (15 s by default; a refused connection or a busy firewall, 429/503, is asked again twice after a pause, and a read that timed out once); answers come in the package's envelope (`{"code", "status", "response_id", "message", "data"}`). Plural endpoints are read with `limit=0` (everything). An endpoint the user may not read (403), that this package version does not have (404) or that needs a package that is not installed (424, e.g. WireGuard) is skipped, and so is one that fails on the firewall (5xx, a timeout) instead of failing the whole collection; only `/api/v2/status/system` is required. Endpoint reference: the package's [API docs](https://pfrest.org/api-docs/) and [OpenAPI schema](https://pfrest.org/api-docs/openapi.json).
 
 | Endpoint | Fields read |
 |---|---|
@@ -141,11 +142,11 @@ Mapping details:
 
 ## What it changes
 
-Changes are applied only when you confirm one in Omini (Omini's guarded changes), and only with the write privileges below; a missing privilege is named in the error. Everything Omini writes carries **Omini** in its description, so you can tell it apart in the pfSense UI. pfSense saves each change in its configuration as the API makes it; after applying, the plugin reads the configuration again and fails the change unless it reads back as asked (a network it was creating is then removed again).
+Changes are applied only when you confirm one in Omini (Omini's guarded changes), and only with the write privileges below; a missing privilege is named in the error. Everything Omini writes carries **Omini** in its description, so you can tell it apart in the pfSense UI. pfSense saves each change in its configuration as the API makes it; after applying, the plugin reads the configuration again (every 2 seconds, up to 30; a read that fails meanwhile is read again) and fails the change unless it reads back as asked (a network it was creating is then removed again, and the error ends "(undone)", or "(could not be undone: check it on the device)" when the removal fails too).
 
 | Change | What the plugin does on pfSense |
 |---|---|
-| **port.enabled** | Turns the assigned interface on the port (`igc1`, `igc1.20`) on or off: `PATCH /api/v2/interface` with its pfSense name (`opt2`) and `enable`, then `POST /api/v2/interface/apply`; reads `/api/v2/interfaces` back until it says so, and puts it back as it was when it does not. Never turns off the interface whose address (configured, or current on DHCP) is the one Omini reaches pfSense at; Omini's own guard also refuses cutting itself or the internet off. Unassigned ports (LAGG members) cannot be changed |
+| **port.enabled** | Turns the assigned interface on the port (`igc1`, `igc1.20`) on or off: `PATCH /api/v2/interface` with its pfSense name (`opt2`) and `enable`, then `POST /api/v2/interface/apply`; reads `/api/v2/interfaces` back until it says so (up to 30 s), and puts it back as it was when it does not ("(undone)" in the error). Never turns off the interface whose address (configured, or current on DHCP) is the one Omini reaches pfSense at; Omini's own guard also refuses cutting itself or the internet off. Unassigned ports (LAGG members) cannot be changed |
 | **network.set** (create) | Adds the VLAN on the port toward the switches (`POST /api/v2/interface/vlan`, on the LAN's port when none is named; never on a bridge or another VLAN), assigns it with the gateway as a static IPv4 address (`POST /api/v2/interface`, then `POST /api/v2/interface/apply`), turns on its DHCP server with the range and the gateway as DNS server (`POST` — or, on older packages, `PATCH` — `/api/v2/services/dhcp_server`, then `…/dhcp_server/apply`) and writes the access rules (below; `POST /api/v2/firewall/rule`, then `POST /api/v2/firewall/apply`) |
 | **network.set** (change) | Changes the same things in place with `PATCH` (interface description and address, DHCP range or DHCP off); the rules are replaced only when the access changes to another preset. The LAN is VLAN 1 and is never moved; the address Omini reaches pfSense at is never changed |
 | **network.delete** | Removes the network's rules, its DHCP server (`DELETE /api/v2/services/dhcp_server`, or turned off on older packages), the interface assignment (`DELETE /api/v2/interface`) and the VLAN (`DELETE /api/v2/interface/vlan`). Never the LAN, never a WAN |

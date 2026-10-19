@@ -643,18 +643,18 @@ def port_enabled(c: Client, port: str, enable: bool, status: dict[str, Any] | No
     if before == enable:
         return
     nets.write(c.patch, nets.INTERFACE, {"id": ifname, "enable": enable})
-    nets.write(c.post, nets.INTERFACE_APPLY)
 
     def reads_back() -> bool:
         r = assigned(c, port)
         return r is not None and (r.get("enable") is True) == enable
 
-    try:
-        nets.wait_for(reads_back, f"turning {port} {'on' if enable else 'off'}")
-    except PluginError:
-        try:
-            nets.write(c.patch, nets.INTERFACE, {"id": ifname, "enable": before})
-            nets.write(c.post, nets.INTERFACE_APPLY)
-        except Exception:
-            log.exception("could not put %s back as it was", port)
-        raise
+    def put_back() -> None:
+        nets.write(c.patch, nets.INTERFACE, {"id": ifname, "enable": before})
+        nets.write(c.post, nets.INTERFACE_APPLY)
+
+    nets.wait_for(
+        reads_back,
+        f"turning {port} {'on' if enable else 'off'}",
+        apply=lambda: nets.write(c.post, nets.INTERFACE_APPLY),
+        undo=put_back,
+    )
